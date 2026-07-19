@@ -1,0 +1,41 @@
+# Dependencies & build
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Secrets & local env (keep .env.example)
+.env
+.env.*
+!.env.example
+
+# Runtime data (memories, skills, sessions, agent cwd, Tailscale state)
+data/
+workspace/
+tailscale-state/
+
+# Logs & debug
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+
+# Docker / compose local overrides
+compose.override.yaml
+compose.override.yml
+docker-compose.override.yml

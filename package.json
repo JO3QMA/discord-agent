@@ -1,0 +1,31 @@
+{
+  "name": "cursor-discord-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Discord gateway over Cursor SDK with Hermes-style memory/skills learning loop",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "mcp": "tsx src/mcp/server.ts",
+    "check:memory": "tsx src/cli/check-memory.ts",
+    "check:mcp": "tsx src/cli/check-mcp.ts",
+    "smoke:sdk": "tsx src/cli/smoke-sdk.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@cursor/sdk": "1.0.23",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "discord.js": "14.27.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "tsx": "4.20.5",
+    "typescript": "5.9.3"
+  }
+}

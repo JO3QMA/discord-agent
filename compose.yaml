@@ -1,0 +1,38 @@
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    hostname: cursor-discord
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: "${TS_AUTHKEY}"
+      TS_STATE_DIR: "/var/lib/tailscale"
+      TS_USERSPACE: "false"
+    volumes:
+      - ./tailscale-state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+  gateway:
+    build: .
+    network_mode: "service:tailscale"
+    restart: unless-stopped
+    environment:
+      CURSOR_API_KEY: "${CURSOR_API_KEY}"
+      DISCORD_BOT_TOKEN: "${DISCORD_BOT_TOKEN}"
+      DISCORD_ALLOWED_USER_IDS: "${DISCORD_ALLOWED_USER_IDS}"
+      DISCORD_ALLOWED_CHANNEL_IDS: "${DISCORD_ALLOWED_CHANNEL_IDS:-}"
+      DISCORD_REQUIRE_MENTION: "${DISCORD_REQUIRE_MENTION:-false}"
+      DISCORD_GUILD_ID: "${DISCORD_GUILD_ID:-}"
+      CURSOR_MODEL: "${CURSOR_MODEL:-composer-2.5}"
+      MEMORY_NOTIFICATIONS: "${MEMORY_NOTIFICATIONS:-on}"
+      DATA_DIR: /data
+      AGENT_CWD: /workspace
+      TZ: ${TZ:-Asia/Tokyo}
+    volumes:
+      - ./data:/data
+      - ${AGENT_CWD:-./workspace}:/workspace
+    init: true
+    depends_on:
+      - tailscale

@@ -55,6 +55,8 @@ docker compose logs -f gateway
 | `/approve` `/deny` | pending 書き込み承認（shell 危険コマンドは対象外） |
 | `/honcho` | ローカルユーザモデル |
 
+`DISCORD_GUILD_ID` あり: ギルドへ即時登録し、**グローバルコマンドは空クリア**（二重表示防止）。なし: グローバルのみ（反映に最大約1時間）。
+
 ## 学習ループ / 追加機能
 
 - セッション開始時: SOUL / personality / CONTEXT / Honcho / MEMORY / skills を注入

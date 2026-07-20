@@ -327,11 +327,16 @@ async function registerSlashCommands(
 ): Promise<void> {
   const rest = new REST({ version: "10" }).setToken(cfg.discordBotToken);
   if (cfg.discordGuildId) {
+    // Guild commands appear instantly. Clear global commands so Discord does not
+    // show the same names twice (global + guild overlap after switching modes).
     await rest.put(
       Routes.applicationGuildCommands(applicationId, cfg.discordGuildId),
       { body: slashCommands },
     );
-    console.log(`slash commands registered for guild ${cfg.discordGuildId}`);
+    await rest.put(Routes.applicationCommands(applicationId), { body: [] });
+    console.log(
+      `slash commands registered for guild ${cfg.discordGuildId} (global cleared)`,
+    );
     return;
   }
   await rest.put(Routes.applicationCommands(applicationId), {

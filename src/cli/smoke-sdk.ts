@@ -26,6 +26,7 @@ async function main() {
   const { agent } = await openAgent({
     apiKey: key,
     modelId: process.env.CURSOR_MODEL?.trim() || "composer-2.5",
+    modelFast: process.env.CURSOR_MODEL_FAST?.trim().toLowerCase() === "true",
     dataDir,
     agentCwd: cwd,
   });

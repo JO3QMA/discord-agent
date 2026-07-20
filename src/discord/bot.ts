@@ -20,6 +20,7 @@ import {
   runEphemeralPrompt,
   runUserTurn,
   saveSessionStore,
+  formatModelLabel,
   type SessionMeta,
 } from "../agent/session.js";
 import { ensureMemoryLayout, formatMemorySummary } from "../memory/store.js";
@@ -349,6 +350,7 @@ function agentOpts(cfg: AppConfig, modelId: string) {
   return {
     apiKey: cfg.cursorApiKey,
     modelId,
+    modelFast: cfg.modelFast,
     dataDir: cfg.dataDir,
     agentCwd: cfg.agentCwd,
   };
@@ -653,7 +655,9 @@ async function handleSlash(
     const s = await loadSettings(cfg.dataDir);
     if (!n) {
       const cur = s.modelBySession[key] || cfg.modelId;
-      await interaction.reply(`現在のモデル: \`${cur}\``);
+      await interaction.reply(
+        `現在のモデル: \`${formatModelLabel(cur, cfg.modelFast)}\``,
+      );
       return;
     }
     s.modelBySession[key] = n;
@@ -661,7 +665,9 @@ async function handleSlash(
     const store = await loadSessionStore(cfg.dataDir);
     delete store[key];
     await saveSessionStore(cfg.dataDir, store);
-    await interaction.reply(`モデルを \`${n}\` に切替（次回 create）`);
+    await interaction.reply(
+      `モデルを \`${formatModelLabel(n, cfg.modelFast)}\` に切替（次回 create）`,
+    );
     return;
   }
 
@@ -669,14 +675,15 @@ async function handleSlash(
     const store = await loadSessionStore(cfg.dataDir);
     const meta = store[key];
     const model = await resolveModel(cfg, cfg.dataDir, key);
+    const label = formatModelLabel(model, cfg.modelFast);
     if (!meta) {
-      await interaction.reply(`model=\`${model}\` — まだセッションなし`);
+      await interaction.reply(`model=\`${label}\` — まだセッションなし`);
       return;
     }
     const inn = meta.inputTokens ?? "?";
     const out = meta.outputTokens ?? "?";
     await interaction.reply(
-      `model=\`${model}\` turns=${meta.turns} inputTokens~=${inn} outputTokens~=${out}\n(詳細は Cursor ダッシュボード SDK タグも参照)`,
+      `model=\`${label}\` turns=${meta.turns} inputTokens~=${inn} outputTokens~=${out}\n(詳細は Cursor ダッシュボード SDK タグも参照)`,
     );
     return;
   }
@@ -1082,6 +1089,7 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
 
   client.once(Events.ClientReady, async (readyClient) => {
     console.log(`discord ready as ${readyClient.user.tag}`);
+    console.log(`model ${formatModelLabel(cfg.modelId, cfg.modelFast)}`);
     try {
       await registerSlashCommands(cfg, readyClient.application.id);
     } catch (err) {

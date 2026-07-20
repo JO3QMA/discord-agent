@@ -48,6 +48,11 @@ export type AppConfig = {
   dataDir: string;
   agentCwd: string;
   modelId: string;
+  /**
+   * Composer 系は params 省略時に SDK デフォルトが fast=true。
+   * 明示しないと composer-2.5-fast 相当になる。
+   */
+  modelFast: boolean;
   memoryNotifications: "off" | "on";
   /** Send a message to /sethome channel on gateway start. */
   homeNotifyOnStart: boolean;
@@ -71,6 +76,7 @@ export function loadConfig(): AppConfig {
     dataDir,
     agentCwd,
     modelId: process.env.CURSOR_MODEL?.trim() || "composer-2.5",
+    modelFast: parseBool(process.env.CURSOR_MODEL_FAST, false),
     memoryNotifications: notif,
     homeNotifyOnStart: parseBool(process.env.HOME_NOTIFY_ON_START, true),
   };

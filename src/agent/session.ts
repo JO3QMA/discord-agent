@@ -139,9 +139,32 @@ export async function buildSystemPreamble(
 export type AgentHandles = {
   apiKey: string;
   modelId: string;
+  /** Composer 系のみ適用。省略時は false（非 fast）。 */
+  modelFast?: boolean;
   dataDir: string;
   agentCwd: string;
 };
+
+/** Build SDK ModelSelection. Composer omits params → default variant is fast=true. */
+export function toModelSelection(
+  modelId: string,
+  modelFast = false,
+): { id: string; params?: Array<{ id: string; value: string }> } {
+  if (modelId.startsWith("composer")) {
+    return {
+      id: modelId,
+      params: [{ id: "fast", value: modelFast ? "true" : "false" }],
+    };
+  }
+  return { id: modelId };
+}
+
+export function formatModelLabel(modelId: string, modelFast = false): string {
+  if (modelId.startsWith("composer")) {
+    return `${modelId} (fast=${modelFast})`;
+  }
+  return modelId;
+}
 
 export type OpenedAgent = {
   agent: SDKAgent;
@@ -159,7 +182,7 @@ export async function openAgent(
   );
   const common = {
     apiKey: opts.apiKey,
-    model: { id: opts.modelId },
+    model: toModelSelection(opts.modelId, opts.modelFast ?? false),
     mcpServers,
     local: { cwd: opts.agentCwd },
   };

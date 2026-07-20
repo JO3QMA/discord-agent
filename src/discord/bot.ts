@@ -978,10 +978,13 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
       const store = await loadSessionStore(cfg.dataDir);
       const meta = store[args.key];
       const modelId = await resolveModel(cfg, cfg.dataDir, args.key);
-      const agent = await openAgent(agentOpts(cfg, modelId), meta?.agentId);
+      const { agent, resumed } = await openAgent(
+        agentOpts(cfg, modelId),
+        meta?.agentId,
+      );
 
       try {
-        const isFirst = !meta || meta.turns === 0;
+        const isFirst = !resumed || !meta || meta.turns === 0;
         let combined = text;
         const { text: answer, usage } = await runUserTurn(
           agent,

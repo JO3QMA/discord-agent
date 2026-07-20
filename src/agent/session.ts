@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   Agent,
+  AgentNotFoundError,
   type McpServerConfig,
   type Run,
   type SDKAgent,
@@ -142,10 +143,16 @@ export type AgentHandles = {
   agentCwd: string;
 };
 
+export type OpenedAgent = {
+  agent: SDKAgent;
+  /** false when we had to create because resume target was gone (rebuild, wiped SDK state, etc.) */
+  resumed: boolean;
+};
+
 export async function openAgent(
   opts: AgentHandles,
   existingId?: string,
-): Promise<SDKAgent> {
+): Promise<OpenedAgent> {
   const mcpServers = await mergeMcpServers(
     opts.dataDir,
     builtinMcpConfig(opts.dataDir),
@@ -157,9 +164,21 @@ export async function openAgent(
     local: { cwd: opts.agentCwd },
   };
   if (existingId) {
-    return Agent.resume(existingId, common);
+    try {
+      return { agent: await Agent.resume(existingId, common), resumed: true };
+    } catch (err) {
+      // sessions.json lives on /data, but local SDK agent blobs live in the
+      // container filesystem and vanish on image recreate — not an env misconfig.
+      if (err instanceof AgentNotFoundError || (err as { code?: string }).code === "agent_not_found") {
+        console.warn(
+          `agent ${existingId} not found; creating a new session (stale sessions.json after rebuild is common)`,
+        );
+      } else {
+        throw err;
+      }
+    }
   }
-  return Agent.create(common);
+  return { agent: await Agent.create(common), resumed: false };
 }
 
 export type TurnProgress = (line: string) => void | Promise<void>;
@@ -253,7 +272,7 @@ export async function runEphemeralPrompt(
   opts: AgentHandles,
   prompt: string,
 ): Promise<string> {
-  const agent = await openAgent(opts);
+  const { agent } = await openAgent(opts);
   try {
     const { text } = await runUserTurn(agent, opts.dataDir, prompt, true);
     return text;

@@ -72,6 +72,12 @@ docker compose logs -f gateway
 
 Cursor SDK はシェル危険コマンドのホスト側承認イベントを露出しない。`/approve` `/deny` は **memory/skills の pending 書き込み** のみ。シェル承認は SDK 側の将来サポート待ち。
 
+## セッションと `agent_not_found`
+
+`data/sessions.json` の `agentId` は永続ボリュームに残りますが、ローカル SDK のエージェント実体はコンテナ内にあり、**イメージ再ビルドで消えます**。env ミスではなく、そのとき `Agent.resume` が `agent_not_found` になります。ゲートウェイは自動で新規 create にフォールバックします。手動なら Discord で `/new` でも可。
+
+ExperimentalWarning（SQLite）は Node の `node:sqlite` に関する警告で、動作上の問題ではありません。
+
 ## Honcho（#17）
 
 外部 Honcho は使わず、`data/honcho.json` のローカル trait ストア + MCP `honcho_trait` / `/honcho` で最小実装。

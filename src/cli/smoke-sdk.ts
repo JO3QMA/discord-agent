@@ -23,7 +23,7 @@ async function main() {
   await ensureSkillsLayout(dataDir);
   await fs.writeFile(path.join(cwd, "README.md"), "# smoke\n", "utf8");
 
-  const agent = await openAgent({
+  const { agent } = await openAgent({
     apiKey: key,
     modelId: process.env.CURSOR_MODEL?.trim() || "composer-2.5",
     dataDir,

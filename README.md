@@ -19,6 +19,7 @@ npm ci
 npm run check:memory
 npm run check:search
 npm run check:mcp
+npm run check:session
 ```
 
 ## ローカル起動
@@ -39,7 +40,7 @@ docker compose logs -f gateway
 | コマンド | 意味 |
 |----------|------|
 | 通常メッセージ | Cursor agent → 返信 → 学習レビュー（添付・音声メモ可） |
-| `/new` | セッション破棄 |
+| `/new` | セッション破棄（実行中なら中断してから破棄。次メッセージで create） |
 | `/memory` | 表示 / pending / approve / reject / approval on\|off |
 | `/skills` | list / install / pending / approve / reject / approval |
 | `/search` | 過去セッション FTS5 検索 |

@@ -20,6 +20,8 @@ import {
   runEphemeralPrompt,
   runUserTurn,
   saveSessionStore,
+  clearSessionKey,
+  commitSessionMeta,
   formatModelLabel,
   type SessionMeta,
 } from "../agent/session.js";
@@ -402,18 +404,18 @@ async function handleSlash(
   const opt = (n: string) => interaction.options.getString(n) ?? undefined;
 
   if (name === "new") {
-    if (busy.has(key)) {
-      await interaction.reply({
-        content: "まだ前のターンを処理中です。少し待ってください。",
-        ephemeral: true,
-      });
-      return;
+    const a = active.get(key);
+    if (a) {
+      a.queue.length = 0;
+      if (a.run.supports("cancel")) await a.run.cancel().catch(() => {});
+      active.delete(key);
     }
-    const store = await loadSessionStore(cfg.dataDir);
-    delete store[key];
-    await saveSessionStore(cfg.dataDir, store);
+    busy.delete(key);
+    const prev = await clearSessionKey(cfg.dataDir, key);
     await interaction.reply(
-      "新しいエージェントセッションを開始します（次のメッセージで create）。",
+      prev
+        ? `セッションを破棄しました（旧 \`${prev.agentId}\`）。次のメッセージで新規 create します。\n※ MEMORY/USER/skills は残ります。`
+        : "破棄するセッションはありませんでした。次のメッセージで新規 create します。",
     );
     return;
   }
@@ -1032,6 +1034,16 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
         }
 
         if (statusRef.msg) await statusRef.msg.delete().catch(() => {});
+
+        const latestAfter = await loadSessionStore(cfg.dataDir);
+        const clearedMidTurn = Boolean(meta?.agentId && !latestAfter[args.key]);
+        if (clearedMidTurn) {
+          console.warn(
+            `session ${args.key} cleared during turn (${meta?.agentId}); dropping reply`,
+          );
+          return;
+        }
+
         await args.reply(finalAnswer);
 
         indexMessage(cfg.dataDir, args.key, "user", combined);
@@ -1053,8 +1065,17 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
           inputTokens: (meta?.inputTokens ?? 0) + (usage?.input ?? 0),
           outputTokens: (meta?.outputTokens ?? 0) + (usage?.output ?? 0),
         };
-        store[args.key] = nextMeta;
-        await saveSessionStore(cfg.dataDir, store);
+        const saved = await commitSessionMeta(
+          cfg.dataDir,
+          args.key,
+          meta?.agentId,
+          nextMeta,
+        );
+        if (!saved) {
+          console.warn(
+            `session ${args.key} was cleared/replaced during turn; not writing ${agent.agentId}`,
+          );
+        }
 
         if (cfg.memoryNotifications === "on") {
           await args.reply(`💾 ${reviewLine}`);
@@ -1164,9 +1185,27 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
     const hasAtt = message.attachments.size > 0;
     if (!text && !hasAtt) return;
 
+    if (text === "/new") {
+      const key = sessionKeyForUser(message.author.id, message.channel);
+      const a = active.get(key);
+      if (a) {
+        a.queue.length = 0;
+        if (a.run.supports("cancel")) await a.run.cancel().catch(() => {});
+        active.delete(key);
+      }
+      busy.delete(key);
+      const prev = await clearSessionKey(cfg.dataDir, key);
+      await message.reply(
+        prev
+          ? `セッションを破棄しました（旧 \`${prev.agentId}\`）。次のメッセージで新規 create します。\n※ MEMORY/USER/skills は残ります。`
+          : "破棄するセッションはありませんでした。次のメッセージで新規 create します。",
+      );
+      return;
+    }
+
     if (text.startsWith("/")) {
       await message.reply(
-        "スラッシュコマンドは Discord の Application Command UI から実行してください。",
+        "スラッシュコマンドは Discord の Application Command UI から実行してください（例外: チャットの `/new` はセッション破棄します）。",
       );
       return;
     }

@@ -100,6 +100,42 @@ export async function saveSessionStore(
   await fs.writeFile(file, JSON.stringify(store, null, 2), "utf8");
 }
 
+/**
+ * Persist turn meta without resurrecting a session that was cleared (/new etc.)
+ * while this turn held a stale in-memory store.
+ * Returns false if the write was skipped because the mapping was cleared/replaced.
+ */
+export async function commitSessionMeta(
+  dataDir: string,
+  key: string,
+  openedAgentId: string | undefined,
+  next: SessionMeta,
+): Promise<boolean> {
+  const latest = await loadSessionStore(dataDir);
+  const cur = latest[key];
+  // Cleared while we ran (/new, /undo, …) — do not bring the old agent back.
+  if (openedAgentId && !cur) return false;
+  // Another create/resume replaced the mapping under us.
+  if (cur && openedAgentId && cur.agentId !== openedAgentId && cur.agentId !== next.agentId) {
+    return false;
+  }
+  latest[key] = next;
+  await saveSessionStore(dataDir, latest);
+  return true;
+}
+
+export async function clearSessionKey(
+  dataDir: string,
+  key: string,
+): Promise<SessionMeta | undefined> {
+  const store = await loadSessionStore(dataDir);
+  const prev = store[key];
+  if (!prev) return undefined;
+  delete store[key];
+  await saveSessionStore(dataDir, store);
+  return prev;
+}
+
 export async function buildSystemPreamble(
   dataDir: string,
   sessionKey?: string,

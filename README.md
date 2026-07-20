@@ -4,10 +4,10 @@ Discord 入口 + Cursor SDK（ローカル agent）+ Hermes 風 MEMORY/USER/skil
 
 ## 必要なもの
 
-- Node.js ≥ 22.13（ローカル開発）
+- Node.js ≥ 22.13（ローカル開発。`node:sqlite` FTS5 を使用）
 - Docker / Compose（常駐）
 - [Cursor API key](https://cursor.com/dashboard/integrations)
-- Discord Bot Token（Message Content Intent を有効化。スラッシュコマンド用に Bot をサーバーへ招待）
+- Discord Bot Token（Message Content Intent・Voice を使うなら Voice 関連権限も）
 
 ## セットアップ
 
@@ -17,6 +17,7 @@ cp .env.example .env
 mkdir -p data workspace
 npm ci
 npm run check:memory
+npm run check:search
 npm run check:mcp
 ```
 
@@ -33,37 +34,51 @@ docker compose up -d --build
 docker compose logs -f gateway
 ```
 
-Bot は Discord へ outbound するだけなので、ホストへの inbound ポートは不要です。
-
 ## Discord コマンド
-
-起動時に Application Command を登録します（Discord のスラッシュ UI）。
 
 | コマンド | 意味 |
 |----------|------|
-| 通常メッセージ | Cursor agent に送信 → 返信 → 学習レビュー |
-| `/new` | セッション（agentId）を破棄して次回 create |
-| `/memory` | MEMORY.md / USER.md の現在内容 |
-| `/skills` | skills 一覧 |
+| 通常メッセージ | Cursor agent → 返信 → 学習レビュー（添付・音声メモ可） |
+| `/new` | セッション破棄 |
+| `/memory` | 表示 / pending / approve / reject / approval on\|off |
+| `/skills` | list / install / pending / approve / reject / approval |
+| `/search` | 過去セッション FTS5 検索 |
+| `/stop` `/retry` `/undo` | 中断・再送・ローカル undo + セッションリセット |
+| `/title` `/sessions` `/resume` | 名前付きセッション |
+| `/personality` | `data/personalities/*.md` + `SOUL.md` |
+| `/model` `/usage` | モデル切替・概算トークン |
+| `/sethome` | ホームチャンネル（起動通知・cron 既定宛先） |
+| `/reload-mcp` | `data/mcp.json` / `MCP_SERVERS_JSON` を次回 create に反映 |
+| `/cron` | スケジュールジョブ |
+| `/voice` | on\|off\|tts\|status\|join\|leave |
+| `/background` | 別セッション実行 |
+| `/approve` `/deny` | pending 書き込み承認（shell 危険コマンドは対象外） |
+| `/honcho` | ローカルユーザモデル |
 
-`DISCORD_GUILD_ID` を設定するとそのギルドへ即時登録、未設定ならグローバル登録（反映まで最大約1時間）。
+## 学習ループ / 追加機能
 
-| env | 意味 |
-|-----|------|
-| `DISCORD_ALLOWED_CHANNEL_IDS` | カンマ区切りのチャンネル ID。空なら全チャンネル。親チャンネルを書けばその下のスレッドも可 |
-| `DISCORD_REQUIRE_MENTION` | `true` なら通常メッセージは `@Bot` メンション必須（スラッシュコマンドは不要）。既定 `false` |
+- セッション開始時: SOUL / personality / CONTEXT / Honcho / MEMORY / skills を注入
+- ターン中: memory-skills MCP（memory, skills, session_search, cronjob, honcho_*）
+- 毎ターン後レビュー + `💾` 通知
+- 会話は `data/sessions.sqlite`（FTS5）へインデックス
+- write_approval: `/memory approval on` 等でステージ → approve/reject
+- Cron: `/cron` または MCP `cronjob`、配信はホーム or 作成チャンネル
+- 追加 MCP: `data/mcp.json` または `MCP_SERVERS_JSON`
+- Skills Hub: `/skills install` に SKILL.md の URL/パス
+- 人格サンプル: `examples/personalities/friendly.md` → `data/personalities/friendly.md` にコピー
+- 追加 MCP サンプル: `mcp.json.example` → `data/mcp.json`
 
-セッション鍵: スレッド内なら `thread:<id>`、それ以外は `user:<discordUserId>`。
+## Cursor SDK 制約（#16）
 
-## 長文について
+Cursor SDK はシェル危険コマンドのホスト側承認イベントを露出しない。`/approve` `/deny` は **memory/skills の pending 書き込み** のみ。シェル承認は SDK 側の将来サポート待ち。
 
-Discord は約 2000 字制限のため、ゲートウェイは返信を分割します。大きな成果物は agent に workspace へ書かせてください。
+## Honcho（#17）
 
-## 学習ループ
+外部 Honcho は使わず、`data/honcho.json` のローカル trait ストア + MCP `honcho_trait` / `/honcho` で最小実装。
 
-- セッション最初のターンで MEMORY/USER の frozen snapshot をプロンプト注入
-- ターン中は memory-skills MCP（stdio）で書き込み可
-- 毎ターン後にレビュー follow-up（MCP のみ触る指示）。`MEMORY_NOTIFICATIONS=on` なら `💾 …` を 1 行投稿
+## 音声
+
+`VOICE_API_KEY` または `OPENAI_API_KEY` が必要。VC は `@discordjs/voice` + opusscript。
 
 ## SDK smoke（課金あり）
 

@@ -1,14 +1,33 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Agent, type SDKAgent } from "@cursor/sdk";
+import {
+  Agent,
+  type McpServerConfig,
+  type Run,
+  type SDKAgent,
+  type SDKMessage,
+  type SDKUserMessage,
+} from "@cursor/sdk";
 import { dataPaths } from "../config.js";
 import { buildMemorySnapshot, ensureMemoryLayout } from "../memory/store.js";
 import { ensureSkillsLayout, formatSkillsSummary } from "../skills/store.js";
+import { mergeMcpServers } from "../mcp/extra.js";
+import { buildSoulBlock } from "../soul/store.js";
+import { formatUserModel } from "../honcho/store.js";
+import { loadSettings } from "../gateway/settings.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export type SessionMeta = { agentId: string; turns: number };
+export type SessionMeta = {
+  agentId: string;
+  turns: number;
+  title?: string;
+  lastUserText?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+};
+
 export type SessionStore = Record<string, SessionMeta>;
 
 function stdioEnv(dataDir: string): Record<string, string> {
@@ -19,15 +38,14 @@ function stdioEnv(dataDir: string): Record<string, string> {
   return env;
 }
 
-export function mcpServerConfig(dataDir: string) {
+export function builtinMcpConfig(dataDir: string): Record<string, McpServerConfig> {
   const compiled = path.resolve(__dirname, "../mcp/server.js");
   const source = path.resolve(__dirname, "../mcp/server.ts");
-  // When running via tsx from src/, spawn MCP the same way.
   const isTsRuntime = __dirname.includes(`${path.sep}src${path.sep}`);
   if (isTsRuntime) {
     return {
       memorySkills: {
-        type: "stdio" as const,
+        type: "stdio",
         command: process.execPath,
         args: [
           path.resolve(__dirname, "../../node_modules/tsx/dist/cli.mjs"),
@@ -39,12 +57,17 @@ export function mcpServerConfig(dataDir: string) {
   }
   return {
     memorySkills: {
-      type: "stdio" as const,
+      type: "stdio",
       command: process.execPath,
       args: [compiled],
       env: stdioEnv(dataDir),
     },
   };
+}
+
+/** @deprecated use builtinMcpConfig + merge */
+export function mcpServerConfig(dataDir: string) {
+  return builtinMcpConfig(dataDir);
 }
 
 export async function loadSessionStore(dataDir: string): Promise<SessionStore> {
@@ -58,7 +81,7 @@ export async function loadSessionStore(dataDir: string): Promise<SessionStore> {
         out[k] = { agentId: v, turns: 1 };
       } else if (v && typeof v === "object" && "agentId" in v) {
         const meta = v as SessionMeta;
-        out[k] = { agentId: meta.agentId, turns: meta.turns ?? 1 };
+        out[k] = { ...meta, turns: meta.turns ?? 1 };
       }
     }
     return out;
@@ -76,23 +99,40 @@ export async function saveSessionStore(
   await fs.writeFile(file, JSON.stringify(store, null, 2), "utf8");
 }
 
-export async function buildSystemPreamble(dataDir: string): Promise<string> {
+export async function buildSystemPreamble(
+  dataDir: string,
+  sessionKey?: string,
+): Promise<string> {
   await ensureMemoryLayout(dataDir);
   await ensureSkillsLayout(dataDir);
+  const settings = await loadSettings(dataDir);
+  const personality = sessionKey
+    ? settings.personalityBySession[sessionKey]
+    : undefined;
+  const soul = await buildSoulBlock(dataDir, personality);
   const snapshot = await buildMemorySnapshot(dataDir);
   const skills = await formatSkillsSummary(dataDir);
+  const honcho = await formatUserModel(dataDir);
   return [
     "You are running via a Discord gateway on top of the Cursor agent runtime.",
     "Use the memory-skills MCP tools to persist durable facts and procedural skills.",
+    "Also available: session_search, cronjob, honcho_trait tools when exposed.",
     "Memory targets: `memory` (environment/lessons) and `user` (profile/preferences).",
     "Respect character limits; consolidate when full.",
+    "",
+    soul,
+    "",
+    "=== USER MODEL (local Honcho-style) ===",
+    honcho,
     "",
     "=== FROZEN MEMORY SNAPSHOT (session start; mid-session MCP writes apply next session) ===",
     snapshot,
     "",
     "=== AVAILABLE SKILLS ===",
     skills,
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export type AgentHandles = {
@@ -106,7 +146,10 @@ export async function openAgent(
   opts: AgentHandles,
   existingId?: string,
 ): Promise<SDKAgent> {
-  const mcpServers = mcpServerConfig(opts.dataDir);
+  const mcpServers = await mergeMcpServers(
+    opts.dataDir,
+    builtinMcpConfig(opts.dataDir),
+  );
   const common = {
     apiKey: opts.apiKey,
     model: { id: opts.modelId },
@@ -119,22 +162,62 @@ export async function openAgent(
   return Agent.create(common);
 }
 
+export type TurnProgress = (line: string) => void | Promise<void>;
+
 export async function collectAssistantText(
-  run: Awaited<ReturnType<SDKAgent["send"]>>,
-): Promise<string> {
+  run: Run,
+  onProgress?: TurnProgress,
+): Promise<{ text: string; usage?: { input?: number; output?: number } }> {
   const chunks: string[] = [];
+  let usage: { input?: number; output?: number } | undefined;
+  let lastTool = "";
   for await (const event of run.stream()) {
+    await handleProgress(event, onProgress, (t) => {
+      lastTool = t;
+    });
     if (event.type === "assistant") {
       for (const block of event.message.content) {
         if (block.type === "text") chunks.push(block.text);
       }
     }
+    if (event.type === "usage") {
+      usage = {
+        input: event.usage?.inputTokens,
+        output: event.usage?.outputTokens,
+      };
+    }
   }
   const result = await run.wait();
-  if (result.status === "error") {
-    throw new Error(`agent run failed: ${result.id}`);
+  if (result.status === "cancelled") {
+    return { text: chunks.join("") || "(cancelled)", usage };
   }
-  return chunks.join("") || "(no assistant text)";
+  if (result.status === "error") {
+    throw new Error(`agent run failed: ${result.error?.message ?? result.id}`);
+  }
+  if (result.usage) {
+    usage = {
+      input: result.usage.inputTokens,
+      output: result.usage.outputTokens,
+    };
+  }
+  void lastTool;
+  return { text: chunks.join("") || result.result || "(no assistant text)", usage };
+}
+
+async function handleProgress(
+  event: SDKMessage,
+  onProgress: TurnProgress | undefined,
+  setTool: (name: string) => void,
+): Promise<void> {
+  if (!onProgress) return;
+  if (event.type === "tool_call" && event.status === "running") {
+    setTool(event.name);
+    await onProgress(`🔧 ${event.name}`);
+  } else if (event.type === "status" && event.message) {
+    await onProgress(event.message);
+  } else if (event.type === "thinking") {
+    await onProgress("💭 thinking…");
+  }
 }
 
 export async function runUserTurn(
@@ -142,11 +225,39 @@ export async function runUserTurn(
   dataDir: string,
   userText: string,
   isFirstTurn: boolean,
-): Promise<string> {
-  const preamble = isFirstTurn ? await buildSystemPreamble(dataDir) : null;
+  opts?: {
+    sessionKey?: string;
+    images?: Array<{ data: string; mimeType: string }>;
+    onProgress?: TurnProgress;
+    registerRun?: (run: Run) => void;
+  },
+): Promise<{ text: string; usage?: { input?: number; output?: number }; run: Run }> {
+  const preamble = isFirstTurn
+    ? await buildSystemPreamble(dataDir, opts?.sessionKey)
+    : null;
   const prompt = preamble
     ? `${preamble}\n\n=== USER MESSAGE ===\n${userText}`
     : userText;
-  const run = await agent.send(prompt);
-  return collectAssistantText(run);
+  const message: string | SDKUserMessage =
+    opts?.images?.length
+      ? { text: prompt, images: opts.images }
+      : prompt;
+  const run = await agent.send(message);
+  opts?.registerRun?.(run);
+  const collected = await collectAssistantText(run, opts?.onProgress);
+  return { ...collected, run };
+}
+
+/** One-shot agent for cron / background (always create, then close). */
+export async function runEphemeralPrompt(
+  opts: AgentHandles,
+  prompt: string,
+): Promise<string> {
+  const agent = await openAgent(opts);
+  try {
+    const { text } = await runUserTurn(agent, opts.dataDir, prompt, true);
+    return text;
+  } finally {
+    await agent.close();
+  }
 }

@@ -49,6 +49,8 @@ export type AppConfig = {
   agentCwd: string;
   modelId: string;
   memoryNotifications: "off" | "on";
+  /** Send a message to /sethome channel on gateway start. */
+  homeNotifyOnStart: boolean;
 };
 
 export function loadConfig(): AppConfig {
@@ -70,6 +72,7 @@ export function loadConfig(): AppConfig {
     agentCwd,
     modelId: process.env.CURSOR_MODEL?.trim() || "composer-2.5",
     memoryNotifications: notif,
+    homeNotifyOnStart: parseBool(process.env.HOME_NOTIFY_ON_START, true),
   };
 }
 

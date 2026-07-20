@@ -22,7 +22,11 @@ async function main() {
   const tools = await client.listTools();
   const names = tools.tools.map((t) => t.name).sort();
   const expected = [
+    "cronjob",
+    "honcho_list",
+    "honcho_trait",
     "memory",
+    "session_search",
     "skill_create",
     "skill_delete",
     "skill_patch",

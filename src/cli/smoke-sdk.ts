@@ -31,7 +31,7 @@ async function main() {
   });
 
   try {
-    const text = await runUserTurn(
+    const { text } = await runUserTurn(
       agent,
       dataDir,
       'Using the memory MCP tool only, add to target=memory the exact text "smoke-ok". Then reply with DONE.',

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run check:memory
+
+      - run: npm run check:session
+
+      - run: npm run check:search
+
+      - run: npm run check:mcp
+
+      - name: Docker build
+        run: docker build -t discord-agent:ci .

@@ -30,10 +30,26 @@ npm run dev
 
 ## Docker（Tailscale 同居）
 
+`gateway` は GHCR の `ghcr.io/jo3qma/discord-agent:latest` を使う（公開リポジトリなら `docker login` 不要。private 化したら `docker login ghcr.io`）。
+
 ```bash
-docker compose up -d --build
+docker compose pull gateway
+docker compose up -d
 docker compose logs -f gateway
 ```
+
+手元で Dockerfile を試すとき:
+
+```bash
+docker build -t ghcr.io/jo3qma/discord-agent:latest .
+docker compose up -d
+```
+
+## CI / CD
+
+- PR / `master`: typecheck・check:*・`docker build`（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）
+- `master` マージ後: 同イメージを GHCR へ push（[`.github/workflows/cd.yml`](.github/workflows/cd.yml)）
+- ホスト再起動は手動（上記 `pull` + `up`）
 
 ## Discord コマンド
 

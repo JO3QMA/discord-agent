@@ -15,7 +15,7 @@ services:
       - NET_RAW
 
   gateway:
-    build: .
+    image: ghcr.io/jo3qma/discord-agent:latest
     network_mode: "service:tailscale"
     restart: unless-stopped
     environment:

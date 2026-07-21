@@ -40,21 +40,21 @@ docker compose logs -f gateway
 | コマンド | 意味 |
 |----------|------|
 | 通常メッセージ | Cursor agent → 返信 → 学習レビュー（添付・音声メモ可） |
-| `/new` | セッション破棄（実行中なら中断してから破棄。次メッセージで create） |
+| `/new` | この会話の Cursor **セッション**破棄（実行中なら中断。次メッセージで create） |
 | `/memory` | 表示 / pending / approve / reject / approval on\|off |
 | `/skills` | list / install / pending / approve / reject / approval |
-| `/search` | 過去セッション FTS5 検索 |
+| `/search` | 過去の会話ログ FTS5 検索 |
 | `/stop` `/retry` `/undo` | 中断・再送・ローカル undo + セッションリセット |
-| `/title` `/sessions` `/resume` | 名前付きセッション |
+| `/title` `/sessions` `/resume` | 会話タイトル |
 | `/personality` | `data/personalities/*.md` + `SOUL.md` |
 | `/model` `/usage` | モデル切替・概算トークン |
 | `/sethome` | ホームチャンネル（起動通知・cron 既定宛先） |
 | `/reload-mcp` | `data/mcp.json` / `MCP_SERVERS_JSON` を次回 create に反映 |
 | `/cron` | スケジュールジョブ |
 | `/voice` | on\|off\|tts\|status\|join\|leave |
-| `/background` | 別セッション実行 |
-| `/approve` `/deny` | pending 書き込み承認（shell 危険コマンドは対象外） |
-| `/honcho` | ローカルユーザモデル |
+| `/background` | 別セッションで実行 |
+
+**会話**（Discord）の鍵: 通常／DM は `channel:<id>`（場所共有）、スレッドは `thread:<id>`。**セッション**は Cursor 側。**Operator 鍵** `user:<id>` に人格・USER。旧鍵は移行しない。
 
 Composer（`CURSOR_MODEL=composer-2.5`）は **params 省略時に SDK デフォルトが fast**。ゲートウェイは既定で `CURSOR_MODEL_FAST=false` を明示する。fast にしたいときだけ `true`。
 
@@ -62,11 +62,11 @@ Composer（`CURSOR_MODEL=composer-2.5`）は **params 省略時に SDK デフォ
 
 ## 学習ループ / 追加機能
 
-- セッション開始時: SOUL / personality / CONTEXT / Honcho / MEMORY / skills を注入
-- ターン中: memory-skills MCP（memory, skills, session_search, cronjob, honcho_*）
+- セッション開始時: SOUL / personality / CONTEXT / MEMORY / skills を注入（USER は毎ターン）
+- ターン中: memory-skills MCP（memory, skills, session_search, cronjob）
 - 毎ターン後レビュー + `💾` 通知
 - 会話は `data/sessions.sqlite`（FTS5）へインデックス
-- write_approval: `/memory approval on` 等でステージ → approve/reject
+- write_approval: `/memory approval on` 等でステージ → `/memory approve` / `/skills approve`
 - Cron: `/cron` または MCP `cronjob`、配信はホーム or 作成チャンネル
 - 追加 MCP: `data/mcp.json` または `MCP_SERVERS_JSON`
 - Skills Hub: `/skills install` に SKILL.md の URL/パス
@@ -75,17 +75,13 @@ Composer（`CURSOR_MODEL=composer-2.5`）は **params 省略時に SDK デフォ
 
 ## Cursor SDK 制約（#16）
 
-Cursor SDK はシェル危険コマンドのホスト側承認イベントを露出しない。`/approve` `/deny` は **memory/skills の pending 書き込み** のみ。シェル承認は SDK 側の将来サポート待ち。
+Cursor SDK はシェル危険コマンドのホスト側承認イベントを露出しない。pending 書き込み承認は **`/memory` / `/skills` の approve|reject** のみ。シェル承認は SDK 側の将来サポート待ち。
 
 ## セッションと `agent_not_found`
 
-`data/sessions.json` の `agentId` は永続ボリュームに残りますが、ローカル SDK のエージェント実体はコンテナ内にあり、**イメージ再ビルドで消えます**。env ミスではなく、そのとき `Agent.resume` が `agent_not_found` になります。ゲートウェイは自動で新規 create にフォールバックします。手動なら Discord で `/new` でも可。
+`data/sessions.json` は **会話鍵 → 実行ハンドル（agentId）** の対応です。ローカル SDK のエージェント実体はコンテナ内にあり、**イメージ再ビルドで消えます**。env ミスではなく、そのとき `Agent.resume` が `agent_not_found` になります。ゲートウェイは自動で新規 create にフォールバックします（会話は継続、セッションは新規）。手動なら Discord で `/new` でも可。
 
 ExperimentalWarning（SQLite）は Node の `node:sqlite` に関する警告で、動作上の問題ではありません。
-
-## Honcho（#17）
-
-外部 Honcho は使わず、`data/honcho.json` のローカル trait ストア + MCP `honcho_trait` / `/honcho` で最小実装。
 
 ## 音声
 

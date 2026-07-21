@@ -24,15 +24,22 @@ import {
   removeCronJob,
   updateCronJob,
 } from "../cron/store.js";
-import {
-  memoryGateOn,
-  skillsGateOn,
-  stageWrite,
-} from "../approval/pending.js";
-import { addTrait, formatUserModel } from "../honcho/store.js";
+import { stageWrite } from "../approval/pending.js";
 import { loadSettings } from "../gateway/settings.js";
+import { getActiveOperator } from "../operator/active.js";
 
 const dataDir = process.env.DATA_DIR?.trim() || "./data";
+
+async function requireOperator(): Promise<string | { error: string }> {
+  const id = await getActiveOperator(dataDir);
+  if (!id) {
+    return {
+      error:
+        "no active Operator — gateway must setActiveOperator before USER tools",
+    };
+  }
+  return id;
+}
 
 function json(result: unknown) {
   return {
@@ -60,15 +67,20 @@ async function main() {
       old_text: z.string().optional(),
     },
     async ({ action, target, content, old_text }) => {
-      if (action === "list") return json(await memoryList(dataDir, target));
-      const gated = await memoryGateOn(dataDir);
-      if (gated) {
+      let operatorId: string | undefined;
+      if (target === "user") {
+        const op = await requireOperator();
+        if (typeof op === "object") return json({ success: false, ...op });
+        operatorId = op;
+      }
+      if (action === "list") return json(await memoryList(dataDir, target, operatorId));
+      if ((await loadSettings(dataDir)).memoryWriteApproval) {
         const pending = await stageWrite(
           dataDir,
           "memory",
           action,
           `${action} ${target}: ${(content ?? old_text ?? "").slice(0, 80)}`,
-          { target, content, old_text },
+          { target, content, old_text, operatorId },
           true,
         );
         return json({
@@ -80,16 +92,18 @@ async function main() {
       }
       if (action === "add") {
         if (!content) return json({ success: false, error: "content required" });
-        return json(await memoryAdd(dataDir, target, content));
+        return json(await memoryAdd(dataDir, target, content, operatorId));
       }
       if (action === "replace") {
         if (!content || !old_text) {
           return json({ success: false, error: "content and old_text required" });
         }
-        return json(await memoryReplace(dataDir, target, old_text, content));
+        return json(
+          await memoryReplace(dataDir, target, old_text, content, operatorId),
+        );
       }
       if (!old_text) return json({ success: false, error: "old_text required" });
-      return json(await memoryRemove(dataDir, target, old_text));
+      return json(await memoryRemove(dataDir, target, old_text, operatorId));
     },
   );
 
@@ -123,7 +137,7 @@ async function main() {
     },
     async ({ name, description, body }) => {
       try {
-        if (await skillsGateOn(dataDir)) {
+        if ((await loadSettings(dataDir)).skillsWriteApproval) {
           const pending = await stageWrite(
             dataDir,
             "skill",
@@ -151,7 +165,7 @@ async function main() {
     },
     async ({ name, old_text, new_text }) => {
       try {
-        if (await skillsGateOn(dataDir)) {
+        if ((await loadSettings(dataDir)).skillsWriteApproval) {
           const pending = await stageWrite(
             dataDir,
             "skill",
@@ -175,7 +189,7 @@ async function main() {
     { name: z.string() },
     async ({ name }) => {
       try {
-        if (await skillsGateOn(dataDir)) {
+        if ((await loadSettings(dataDir)).skillsWriteApproval) {
           const pending = await stageWrite(
             dataDir,
             "skill",
@@ -292,20 +306,6 @@ async function main() {
         return json({ success: false, error: String(err) });
       }
     },
-  );
-
-  server.tool(
-    "honcho_trait",
-    "Add a durable user-model trait (local Honcho-style, no external service).",
-    { trait: z.string() },
-    async ({ trait }) => json(await addTrait(dataDir, trait)),
-  );
-
-  server.tool(
-    "honcho_list",
-    "List local user-model traits.",
-    {},
-    async () => json({ text: await formatUserModel(dataDir) }),
   );
 
   const transport = new StdioServerTransport();

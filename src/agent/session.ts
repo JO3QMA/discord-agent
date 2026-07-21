@@ -11,12 +11,13 @@ import {
   type SDKUserMessage,
 } from "@cursor/sdk";
 import { dataPaths } from "../config.js";
-import { buildMemorySnapshot, ensureMemoryLayout } from "../memory/store.js";
+import { buildMemorySnapshot, ensureMemoryLayout, memoryList, ENTRY_SEP } from "../memory/store.js";
 import { ensureSkillsLayout, formatSkillsSummary } from "../skills/store.js";
 import { mergeMcpServers } from "../mcp/extra.js";
 import { buildSoulBlock } from "../soul/store.js";
-import { formatUserModel } from "../honcho/store.js";
 import { loadSettings } from "../gateway/settings.js";
+import { setActiveOperator } from "../operator/active.js";
+import { operatorKey } from "../discord/conversation-key.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -64,11 +65,6 @@ export function builtinMcpConfig(dataDir: string): Record<string, McpServerConfi
       env: stdioEnv(dataDir),
     },
   };
-}
-
-/** @deprecated use builtinMcpConfig + merge */
-export function mcpServerConfig(dataDir: string) {
-  return builtinMcpConfig(dataDir);
 }
 
 export async function loadSessionStore(dataDir: string): Promise<SessionStore> {
@@ -136,31 +132,46 @@ export async function clearSessionKey(
   return prev;
 }
 
+export async function buildOperatorBlock(
+  dataDir: string,
+  operatorId: string,
+): Promise<string> {
+  await ensureMemoryLayout(dataDir);
+  const settings = await loadSettings(dataDir);
+  const personality = settings.personalityByOperator[operatorKey(operatorId)];
+  const soul = await buildSoulBlock(dataDir, personality);
+  const user = await memoryList(dataDir, "user", operatorId);
+  const userBody = user.entries.length
+    ? user.entries.join(ENTRY_SEP)
+    : "(empty USER profile)";
+  return [
+    `=== CURRENT OPERATOR (\`${operatorId}\`) ===`,
+    soul,
+    "",
+    "=== USER PROFILE (Operator-scoped) ===",
+    user.header,
+    userBody,
+  ].join("\n");
+}
+
 export async function buildSystemPreamble(
   dataDir: string,
-  sessionKey?: string,
+  operatorId: string,
 ): Promise<string> {
   await ensureMemoryLayout(dataDir);
   await ensureSkillsLayout(dataDir);
-  const settings = await loadSettings(dataDir);
-  const personality = sessionKey
-    ? settings.personalityBySession[sessionKey]
-    : undefined;
-  const soul = await buildSoulBlock(dataDir, personality);
+  const operatorBlock = await buildOperatorBlock(dataDir, operatorId);
   const snapshot = await buildMemorySnapshot(dataDir);
   const skills = await formatSkillsSummary(dataDir);
-  const honcho = await formatUserModel(dataDir);
   return [
     "You are running via a Discord gateway on top of the Cursor agent runtime.",
     "Use the memory-skills MCP tools to persist durable facts and procedural skills.",
-    "Also available: session_search, cronjob, honcho_trait tools when exposed.",
-    "Memory targets: `memory` (environment/lessons) and `user` (profile/preferences).",
+    "Also available: session_search, cronjob tools when exposed.",
+    "Memory targets: `memory` (shared environment/lessons) and `user` (this Operator's profile).",
     "Respect character limits; consolidate when full.",
+    "This Discord channel/thread shares one Cursor session among allowed Operators; personal profile is Operator-scoped.",
     "",
-    soul,
-    "",
-    "=== USER MODEL (local Honcho-style) ===",
-    honcho,
+    operatorBlock,
     "",
     "=== FROZEN MEMORY SNAPSHOT (session start; mid-session MCP writes apply next session) ===",
     snapshot,
@@ -248,11 +259,8 @@ export async function collectAssistantText(
 ): Promise<{ text: string; usage?: { input?: number; output?: number } }> {
   const chunks: string[] = [];
   let usage: { input?: number; output?: number } | undefined;
-  let lastTool = "";
   for await (const event of run.stream()) {
-    await handleProgress(event, onProgress, (t) => {
-      lastTool = t;
-    });
+    await handleProgress(event, onProgress);
     if (event.type === "assistant") {
       for (const block of event.message.content) {
         if (block.type === "text") chunks.push(block.text);
@@ -278,18 +286,15 @@ export async function collectAssistantText(
       output: result.usage.outputTokens,
     };
   }
-  void lastTool;
   return { text: chunks.join("") || result.result || "(no assistant text)", usage };
 }
 
 async function handleProgress(
   event: SDKMessage,
   onProgress: TurnProgress | undefined,
-  setTool: (name: string) => void,
 ): Promise<void> {
   if (!onProgress) return;
   if (event.type === "tool_call" && event.status === "running") {
-    setTool(event.name);
     await onProgress(`🔧 ${event.name}`);
   } else if (event.type === "status" && event.message) {
     await onProgress(event.message);
@@ -304,18 +309,21 @@ export async function runUserTurn(
   userText: string,
   isFirstTurn: boolean,
   opts?: {
-    sessionKey?: string;
+    operatorId: string;
+    conversationKey?: string;
     images?: Array<{ data: string; mimeType: string }>;
     onProgress?: TurnProgress;
     registerRun?: (run: Run) => void;
   },
 ): Promise<{ text: string; usage?: { input?: number; output?: number }; run: Run }> {
+  if (!opts?.operatorId) {
+    throw new Error("operatorId is required for runUserTurn");
+  }
+  await setActiveOperator(dataDir, opts.operatorId);
   const preamble = isFirstTurn
-    ? await buildSystemPreamble(dataDir, opts?.sessionKey)
-    : null;
-  const prompt = preamble
-    ? `${preamble}\n\n=== USER MESSAGE ===\n${userText}`
-    : userText;
+    ? await buildSystemPreamble(dataDir, opts.operatorId)
+    : await buildOperatorBlock(dataDir, opts.operatorId);
+  const prompt = `${preamble}\n\n=== USER MESSAGE ===\n${userText}`;
   const message: string | SDKUserMessage =
     opts?.images?.length
       ? { text: prompt, images: opts.images }
@@ -330,10 +338,13 @@ export async function runUserTurn(
 export async function runEphemeralPrompt(
   opts: AgentHandles,
   prompt: string,
+  operatorId = "system",
 ): Promise<string> {
   const { agent } = await openAgent(opts);
   try {
-    const { text } = await runUserTurn(agent, opts.dataDir, prompt, true);
+    const { text } = await runUserTurn(agent, opts.dataDir, prompt, true, {
+      operatorId,
+    });
     return text;
   } finally {
     await agent.close();

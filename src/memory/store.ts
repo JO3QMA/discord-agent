@@ -8,17 +8,25 @@ export const ENTRY_SEP = "§";
 
 export type MemoryTarget = "memory" | "user";
 
-type StoreState = {
-  entries: string[];
-};
-
 function limitFor(target: MemoryTarget): number {
   return target === "memory" ? MEMORY_CHAR_LIMIT : USER_CHAR_LIMIT;
 }
 
-function fileFor(dataDir: string, target: MemoryTarget): string {
+function operatorUserFile(dataDir: string, operatorId: string): string {
+  return path.join(dataDir, "memories", "operators", operatorId, "USER.md");
+}
+
+function fileFor(
+  dataDir: string,
+  target: MemoryTarget,
+  operatorId?: string,
+): string {
   const p = dataPaths(dataDir);
-  return target === "memory" ? p.memoryFile : p.userFile;
+  if (target === "memory") return p.memoryFile;
+  if (!operatorId) {
+    throw new Error("operatorId is required for USER (Operator-scoped profile)");
+  }
+  return operatorUserFile(dataDir, operatorId);
 }
 
 function serialize(entries: string[]): string {
@@ -44,26 +52,41 @@ export async function ensureMemoryLayout(dataDir: string): Promise<void> {
   const p = dataPaths(dataDir);
   await fs.mkdir(p.memoriesDir, { recursive: true });
   await fs.mkdir(p.skillsDir, { recursive: true });
-  for (const f of [p.memoryFile, p.userFile]) {
-    try {
-      await fs.access(f);
-    } catch {
-      await fs.writeFile(f, "", "utf8");
-    }
+  await fs.mkdir(path.join(p.memoriesDir, "operators"), { recursive: true });
+  try {
+    await fs.access(p.memoryFile);
+  } catch {
+    await fs.writeFile(p.memoryFile, "", "utf8");
   }
 }
 
-async function readStore(dataDir: string, target: MemoryTarget): Promise<StoreState> {
-  const raw = await fs.readFile(fileFor(dataDir, target), "utf8");
-  return { entries: parse(raw) };
+async function readStore(
+  dataDir: string,
+  target: MemoryTarget,
+  operatorId?: string,
+): Promise<string[]> {
+  if (target === "user" && operatorId) {
+    const file = fileFor(dataDir, target, operatorId);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    try {
+      await fs.access(file);
+    } catch {
+      await fs.writeFile(file, "", "utf8");
+    }
+  }
+  const raw = await fs.readFile(fileFor(dataDir, target, operatorId), "utf8");
+  return parse(raw);
 }
 
 async function writeStore(
   dataDir: string,
   target: MemoryTarget,
   entries: string[],
+  operatorId?: string,
 ): Promise<void> {
-  await fs.writeFile(fileFor(dataDir, target), serialize(entries), "utf8");
+  const file = fileFor(dataDir, target, operatorId);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, serialize(entries), "utf8");
 }
 
 function findUniqueIndex(entries: string[], oldText: string): number | { error: string } {
@@ -118,25 +141,30 @@ export async function memoryAdd(
   dataDir: string,
   target: MemoryTarget,
   content: string,
+  operatorId?: string,
 ): Promise<MemoryResult> {
   const text = content.trim();
   if (!text) return fail(target, [], "content is empty");
-  const { entries } = await readStore(dataDir, target);
-  if (entries.includes(text)) {
-    return ok(target, entries, "no duplicate added");
+  try {
+    const entries = await readStore(dataDir, target, operatorId);
+    if (entries.includes(text)) {
+      return ok(target, entries, "no duplicate added");
+    }
+    const next = [...entries, text];
+    const used = serialize(next).length;
+    const limit = limitFor(target);
+    if (used > limit) {
+      return fail(
+        target,
+        entries,
+        `${target} at ${serialize(entries).length}/${limit} chars. Adding this entry (${text.length} chars) would exceed the limit. Consolidate with replace/remove, then retry.`,
+      );
+    }
+    await writeStore(dataDir, target, next, operatorId);
+    return ok(target, next, "added");
+  } catch (err) {
+    return fail(target, [], err instanceof Error ? err.message : String(err));
   }
-  const next = [...entries, text];
-  const used = serialize(next).length;
-  const limit = limitFor(target);
-  if (used > limit) {
-    return fail(
-      target,
-      entries,
-      `${target} at ${serialize(entries).length}/${limit} chars. Adding this entry (${text.length} chars) would exceed the limit. Consolidate with replace/remove, then retry.`,
-    );
-  }
-  await writeStore(dataDir, target, next);
-  return ok(target, next, "added");
 }
 
 export async function memoryReplace(
@@ -144,45 +172,56 @@ export async function memoryReplace(
   target: MemoryTarget,
   oldText: string,
   content: string,
+  operatorId?: string,
 ): Promise<MemoryResult> {
   const text = content.trim();
   if (!text) return fail(target, [], "content is empty");
-  const { entries } = await readStore(dataDir, target);
-  const idx = findUniqueIndex(entries, oldText);
-  if (typeof idx === "object") return fail(target, entries, idx.error);
-  const next = [...entries];
-  next[idx] = text;
-  const used = serialize(next).length;
-  const limit = limitFor(target);
-  if (used > limit) {
-    return fail(
-      target,
-      entries,
-      `replace would exceed limit (${used}/${limit}). Shorten content or remove another entry first.`,
-    );
+  try {
+    const entries = await readStore(dataDir, target, operatorId);
+    const idx = findUniqueIndex(entries, oldText);
+    if (typeof idx === "object") return fail(target, entries, idx.error);
+    const next = [...entries];
+    next[idx] = text;
+    const used = serialize(next).length;
+    const limit = limitFor(target);
+    if (used > limit) {
+      return fail(
+        target,
+        entries,
+        `replace would exceed limit (${used}/${limit}). Shorten content or remove another entry first.`,
+      );
+    }
+    await writeStore(dataDir, target, next, operatorId);
+    return ok(target, next, "replaced");
+  } catch (err) {
+    return fail(target, [], err instanceof Error ? err.message : String(err));
   }
-  await writeStore(dataDir, target, next);
-  return ok(target, next, "replaced");
 }
 
 export async function memoryRemove(
   dataDir: string,
   target: MemoryTarget,
   oldText: string,
+  operatorId?: string,
 ): Promise<MemoryResult> {
-  const { entries } = await readStore(dataDir, target);
-  const idx = findUniqueIndex(entries, oldText);
-  if (typeof idx === "object") return fail(target, entries, idx.error);
-  const next = entries.filter((_, i) => i !== idx);
-  await writeStore(dataDir, target, next);
-  return ok(target, next, "removed");
+  try {
+    const entries = await readStore(dataDir, target, operatorId);
+    const idx = findUniqueIndex(entries, oldText);
+    if (typeof idx === "object") return fail(target, entries, idx.error);
+    const next = entries.filter((_, i) => i !== idx);
+    await writeStore(dataDir, target, next, operatorId);
+    return ok(target, next, "removed");
+  } catch (err) {
+    return fail(target, [], err instanceof Error ? err.message : String(err));
+  }
 }
 
 export async function memoryList(
   dataDir: string,
   target: MemoryTarget,
+  operatorId?: string,
 ): Promise<{ entries: string[]; usage: string; header: string }> {
-  const { entries } = await readStore(dataDir, target);
+  const entries = await readStore(dataDir, target, operatorId);
   const used = serialize(entries).length;
   return {
     entries,
@@ -191,40 +230,27 @@ export async function memoryList(
   };
 }
 
-/** Frozen snapshot for session-start injection (Hermes-style). */
+/** Frozen MEMORY snapshot for session-start injection (USER is per-turn via operatorBlock). */
 export async function buildMemorySnapshot(dataDir: string): Promise<string> {
   const mem = await memoryList(dataDir, "memory");
-  const user = await memoryList(dataDir, "user");
-  const blocks: string[] = [];
-  if (mem.entries.length) {
-    blocks.push(
-      `══════════════════════════════════════════════\n${mem.header}\n══════════════════════════════════════════════\n${mem.entries.join(ENTRY_SEP)}`,
-    );
-  }
-  if (user.entries.length) {
-    blocks.push(
-      `══════════════════════════════════════════════\n${user.header}\n══════════════════════════════════════════════\n${user.entries.join(ENTRY_SEP)}`,
-    );
-  }
-  if (!blocks.length) {
+  if (!mem.entries.length) {
     return "(no curated memory yet — use memory MCP tools to save durable facts)";
   }
-  return blocks.join("\n\n");
+  return `══════════════════════════════════════════════\n${mem.header}\n══════════════════════════════════════════════\n${mem.entries.join(ENTRY_SEP)}`;
 }
 
-export async function formatMemorySummary(dataDir: string): Promise<string> {
+export async function formatMemorySummary(
+  dataDir: string,
+  operatorId: string,
+): Promise<string> {
   const mem = await memoryList(dataDir, "memory");
-  const user = await memoryList(dataDir, "user");
+  const user = await memoryList(dataDir, "user", operatorId);
   const lines = [
     `**${mem.header}**`,
     mem.entries.length ? mem.entries.map((e) => `- ${e}`).join("\n") : "_empty_",
     "",
-    `**${user.header}**`,
+    `**${user.header}** (Operator \`${operatorId}\`)`,
     user.entries.length ? user.entries.map((e) => `- ${e}`).join("\n") : "_empty_",
   ];
   return lines.join("\n");
-}
-
-export function memoriesRoot(dataDir: string): string {
-  return path.join(dataDir, "memories");
 }

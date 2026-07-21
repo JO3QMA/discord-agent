@@ -37,6 +37,7 @@ async function main() {
       dataDir,
       'Using the memory MCP tool only, add to target=memory the exact text "smoke-ok". Then reply with DONE.',
       true,
+      { operatorId: "smoke-user" },
     );
     console.log("assistant:", text.slice(0, 500));
 

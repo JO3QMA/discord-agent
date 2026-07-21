@@ -51,8 +51,7 @@ import {
   ensureSoulLayout,
   listPersonalities,
 } from "../soul/store.js";
-import { formatUserModel, addTrait } from "../honcho/store.js";
-import { installSkillFromSource } from "../skills/hub.js";
+import { installSkillFromSource } from "../skills/store.js";
 import {
   isVoiceAttachment,
   prepareMessageAttachments,
@@ -64,6 +63,7 @@ import {
   voiceConfigFromEnv,
 } from "../voice/stt-tts.js";
 import { vcJoin, vcLeave, vcStatus } from "../voice/vc.js";
+import { conversationKey, operatorKey } from "./conversation-key.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -75,7 +75,7 @@ type Active = {
 const slashCommands = [
   new SlashCommandBuilder()
     .setName("new")
-    .setDescription("エージェントセッションを破棄し、次のメッセージで新規作成する"),
+    .setDescription("この会話の Cursor セッションを破棄し、次のメッセージで新規作成する"),
   new SlashCommandBuilder()
     .setName("memory")
     .setDescription("MEMORY/USER 表示、または承認ゲート操作")
@@ -118,7 +118,7 @@ const slashCommands = [
     ),
   new SlashCommandBuilder()
     .setName("search")
-    .setDescription("過去セッションを FTS5 検索")
+    .setDescription("過去の会話ログを FTS5 検索")
     .addStringOption((o) =>
       o.setName("query").setDescription("検索語").setRequired(true),
     ),
@@ -133,14 +133,14 @@ const slashCommands = [
     .setDescription("直前交換をローカル履歴から削除しセッションをリセット"),
   new SlashCommandBuilder()
     .setName("title")
-    .setDescription("セッションにタイトルを付ける")
+    .setDescription("この会話にタイトルを付ける")
     .addStringOption((o) => o.setName("name").setDescription("タイトル")),
   new SlashCommandBuilder()
     .setName("sessions")
-    .setDescription("名前付きセッション一覧"),
+    .setDescription("タイトル付き会話一覧"),
   new SlashCommandBuilder()
     .setName("resume")
-    .setDescription("名前付きセッションへ切替")
+    .setDescription("タイトル付き会話へ切替")
     .addStringOption((o) =>
       o.setName("name").setDescription("タイトル").setRequired(true),
     ),
@@ -154,7 +154,7 @@ const slashCommands = [
     .addStringOption((o) => o.setName("name").setDescription("モデル id")),
   new SlashCommandBuilder()
     .setName("usage")
-    .setDescription("セッション使用量"),
+    .setDescription("この会話のセッション使用量"),
   new SlashCommandBuilder()
     .setName("sethome")
     .setDescription("このチャンネルをホームに設定"),
@@ -205,37 +205,7 @@ const slashCommands = [
     .addStringOption((o) =>
       o.setName("prompt").setDescription("プロンプト").setRequired(true),
     ),
-  new SlashCommandBuilder()
-    .setName("approve")
-    .setDescription("pending 書き込みを承認（危険コマンドは Cursor SDK 非対応）")
-    .addStringOption((o) =>
-      o.setName("id").setDescription("pending id または all").setRequired(true),
-    ),
-  new SlashCommandBuilder()
-    .setName("deny")
-    .setDescription("pending 書き込みを拒否")
-    .addStringOption((o) =>
-      o.setName("id").setDescription("pending id または all").setRequired(true),
-    ),
-  new SlashCommandBuilder()
-    .setName("honcho")
-    .setDescription("ローカルユーザモデル")
-    .addStringOption((o) =>
-      o
-        .setName("action")
-        .setDescription("list|add")
-        .addChoices(
-          { name: "list", value: "list" },
-          { name: "add", value: "add" },
-        ),
-    )
-    .addStringOption((o) => o.setName("trait").setDescription("trait 文言")),
 ].map((c) => c.toJSON());
-
-function sessionKeyForUser(userId: string, channel: TextBasedChannel | null): string {
-  if (channel?.isThread()) return `thread:${channel.id}`;
-  return `user:${userId}`;
-}
 
 function isAllowedUser(cfg: AppConfig, userId: string): boolean {
   return cfg.allowedUserIds.has(userId);
@@ -361,10 +331,62 @@ function agentOpts(cfg: AppConfig, modelId: string) {
 async function resolveModel(
   cfg: AppConfig,
   dataDir: string,
-  sessionKey: string,
+  userId: string,
 ): Promise<string> {
   const s = await loadSettings(dataDir);
-  return s.modelBySession[sessionKey] || cfg.modelId;
+  return s.modelByOperator[operatorKey(userId)] || cfg.modelId;
+}
+
+type PendingKind = "memory" | "skill";
+
+async function handleWriteApprovalActions(
+  cfg: AppConfig,
+  interaction: ChatInputCommandInteraction,
+  kind: PendingKind,
+  action: string,
+  id: string | undefined,
+): Promise<boolean> {
+  if (action === "pending") {
+    const pending = (await listPending(cfg.dataDir)).filter((p) => p.kind === kind);
+    await replyInteraction(
+      interaction,
+      pending.length
+        ? pending.map((p) => `- \`${p.id}\` ${p.action}: ${p.summary}`).join("\n")
+        : `_no pending ${kind === "memory" ? "memory" : "skills"}_`,
+    );
+    return true;
+  }
+  if (action === "approval") {
+    if (id !== "on" && id !== "off") {
+      await replyInteraction(interaction, "id に on|off を指定してください");
+      return true;
+    }
+    const on = id === "on";
+    if (kind === "memory") {
+      await updateSettings(cfg.dataDir, { memoryWriteApproval: on });
+      await replyInteraction(interaction, `memory write_approval = ${on}`);
+    } else {
+      await updateSettings(cfg.dataDir, { skillsWriteApproval: on });
+      await replyInteraction(interaction, `skills write_approval = ${on}`);
+    }
+    return true;
+  }
+  if (action === "approve") {
+    const msg =
+      id === "all"
+        ? await approveAll(cfg.dataDir)
+        : (await applyPending(cfg.dataDir, id || "")).message;
+    await replyInteraction(interaction, msg);
+    return true;
+  }
+  if (action === "reject") {
+    await replyInteraction(
+      interaction,
+      (await rejectPending(cfg.dataDir, id || "all")).message,
+    );
+    return true;
+  }
+  return false;
 }
 
 async function handleSlash(
@@ -373,7 +395,6 @@ async function handleSlash(
   interaction: ChatInputCommandInteraction,
   busy: Set<string>,
   active: Map<string, Active>,
-  namedIndex: Map<string, { key: string; agentId: string }>,
   runTurn: (args: {
     key: string;
     userId: string;
@@ -399,7 +420,7 @@ async function handleSlash(
     return;
   }
 
-  const key = sessionKeyForUser(interaction.user.id, interaction.channel);
+  const key = conversationKey(interaction.channel);
   const name = interaction.commandName;
   const opt = (n: string) => interaction.options.getString(n) ?? undefined;
 
@@ -425,42 +446,13 @@ async function handleSlash(
     const action = opt("action") || "show";
     const id = opt("id");
     if (action === "show") {
-      await replyInteraction(interaction, await formatMemorySummary(cfg.dataDir));
-      return;
-    }
-    if (action === "pending") {
-      const pending = (await listPending(cfg.dataDir)).filter((p) => p.kind === "memory");
       await replyInteraction(
         interaction,
-        pending.length
-          ? pending.map((p) => `- \`${p.id}\` ${p.action}: ${p.summary}`).join("\n")
-          : "_no pending memory_",
+        await formatMemorySummary(cfg.dataDir, interaction.user.id),
       );
       return;
     }
-    if (action === "approval") {
-      const on = id === "on";
-      if (id !== "on" && id !== "off") {
-        await replyInteraction(interaction, "id に on|off を指定してください");
-        return;
-      }
-      await updateSettings(cfg.dataDir, { memoryWriteApproval: on });
-      await replyInteraction(interaction, `memory write_approval = ${on}`);
-      return;
-    }
-    if (action === "approve") {
-      const msg =
-        id === "all"
-          ? await approveAll(cfg.dataDir)
-          : (await applyPending(cfg.dataDir, id || "")).message;
-      await replyInteraction(interaction, msg);
-      return;
-    }
-    if (action === "reject") {
-      await replyInteraction(
-        interaction,
-        (await rejectPending(cfg.dataDir, id || "all")).message,
-      );
+    if (await handleWriteApprovalActions(cfg, interaction, "memory", action, id)) {
       return;
     }
   }
@@ -489,39 +481,7 @@ async function handleSlash(
       }
       return;
     }
-    if (action === "pending") {
-      const pending = (await listPending(cfg.dataDir)).filter((p) => p.kind === "skill");
-      await replyInteraction(
-        interaction,
-        pending.length
-          ? pending.map((p) => `- \`${p.id}\` ${p.action}: ${p.summary}`).join("\n")
-          : "_no pending skills_",
-      );
-      return;
-    }
-    if (action === "approval") {
-      const on = id === "on";
-      if (id !== "on" && id !== "off") {
-        await replyInteraction(interaction, "id に on|off を指定");
-        return;
-      }
-      await updateSettings(cfg.dataDir, { skillsWriteApproval: on });
-      await replyInteraction(interaction, `skills write_approval = ${on}`);
-      return;
-    }
-    if (action === "approve") {
-      const msg =
-        id === "all"
-          ? await approveAll(cfg.dataDir)
-          : (await applyPending(cfg.dataDir, id || "")).message;
-      await replyInteraction(interaction, msg);
-      return;
-    }
-    if (action === "reject") {
-      await replyInteraction(
-        interaction,
-        (await rejectPending(cfg.dataDir, id || "all")).message,
-      );
+    if (await handleWriteApprovalActions(cfg, interaction, "skill", action, id)) {
       return;
     }
   }
@@ -601,7 +561,6 @@ async function handleSlash(
     meta.title = title;
     store[key] = meta;
     await saveSessionStore(cfg.dataDir, store);
-    namedIndex.set(title, { key, agentId: meta.agentId });
     await interaction.reply(`タイトルを「${title}」に設定しました。`);
     return;
   }
@@ -611,7 +570,7 @@ async function handleSlash(
     const lines = Object.entries(store)
       .filter(([, m]) => m.title)
       .map(([k, m]) => `- **${m.title}** (\`${k}\` turns=${m.turns})`);
-    await interaction.reply(lines.length ? lines.join("\n") : "_no titled sessions_");
+    await interaction.reply(lines.length ? lines.join("\n") : "_タイトル付き会話なし_");
     return;
   }
 
@@ -620,7 +579,7 @@ async function handleSlash(
     const store = await loadSessionStore(cfg.dataDir);
     const found = Object.entries(store).find(([, m]) => m.title === title);
     if (!found) {
-      await interaction.reply(`セッション「${title}」が見つかりません。`);
+      await interaction.reply(`会話「${title}」が見つかりません。`);
       return;
     }
     const [srcKey, meta] = found;
@@ -629,7 +588,9 @@ async function handleSlash(
       // keep title on both
     }
     await saveSessionStore(cfg.dataDir, store);
-    await interaction.reply(`「${title}」をこのチャット鍵に紐付けました。`);
+    await interaction.reply(
+      `「${title}」の実行ハンドルをこの会話に紐付けました（セッションを共有）。`,
+    );
     return;
   }
 
@@ -643,32 +604,36 @@ async function handleSlash(
       return;
     }
     const s = await loadSettings(cfg.dataDir);
-    s.personalityBySession[key] = n;
-    await updateSettings(cfg.dataDir, { personalityBySession: s.personalityBySession });
+    const op = operatorKey(interaction.user.id);
+    s.personalityByOperator[op] = n;
+    await updateSettings(cfg.dataDir, { personalityByOperator: s.personalityByOperator });
     const store = await loadSessionStore(cfg.dataDir);
     delete store[key];
     await saveSessionStore(cfg.dataDir, store);
-    await interaction.reply(`personality=${n}（次回メッセージで新セッション）`);
+    await interaction.reply(
+      `personality=${n}（Operator 付帯。この会話のセッションは次回メッセージで再 create）`,
+    );
     return;
   }
 
   if (name === "model") {
     const n = opt("name");
     const s = await loadSettings(cfg.dataDir);
+    const op = operatorKey(interaction.user.id);
     if (!n) {
-      const cur = s.modelBySession[key] || cfg.modelId;
+      const cur = s.modelByOperator[op] || cfg.modelId;
       await interaction.reply(
         `現在のモデル: \`${formatModelLabel(cur, cfg.modelFast)}\``,
       );
       return;
     }
-    s.modelBySession[key] = n;
-    await updateSettings(cfg.dataDir, { modelBySession: s.modelBySession });
+    s.modelByOperator[op] = n;
+    await updateSettings(cfg.dataDir, { modelByOperator: s.modelByOperator });
     const store = await loadSessionStore(cfg.dataDir);
     delete store[key];
     await saveSessionStore(cfg.dataDir, store);
     await interaction.reply(
-      `モデルを \`${formatModelLabel(n, cfg.modelFast)}\` に切替（次回 create）`,
+      `モデルを \`${formatModelLabel(n, cfg.modelFast)}\` に切替（Operator 付帯・次回 create）`,
     );
     return;
   }
@@ -676,7 +641,7 @@ async function handleSlash(
   if (name === "usage") {
     const store = await loadSessionStore(cfg.dataDir);
     const meta = store[key];
-    const model = await resolveModel(cfg, cfg.dataDir, key);
+    const model = await resolveModel(cfg, cfg.dataDir, interaction.user.id);
     const label = formatModelLabel(model, cfg.modelFast);
     if (!meta) {
       await interaction.reply(`model=\`${label}\` — まだセッションなし`);
@@ -795,7 +760,7 @@ async function handleSlash(
             if (!isAllowedUser(cfg, userId)) return "";
             let answer = "";
             await runTurn({
-              key: sessionKeyForUser(userId, interaction.channel),
+              key: conversationKey(interaction.channel),
               userId,
               channel: interaction.channel!,
               text,
@@ -845,8 +810,8 @@ async function handleSlash(
   if (name === "background") {
     const prompt = opt("prompt")!;
     await interaction.reply("バックグラウンドで実行中…");
-    const model = await resolveModel(cfg, cfg.dataDir, key);
-    runEphemeralPrompt(agentOpts(cfg, model), prompt)
+    const model = await resolveModel(cfg, cfg.dataDir, interaction.user.id);
+    runEphemeralPrompt(agentOpts(cfg, model), prompt, interaction.user.id)
       .then(async (text) => {
         await interaction.followUp(`🧵 background:\n${text.slice(0, 1800)}`);
       })
@@ -855,39 +820,6 @@ async function handleSlash(
           .followUp(`background failed: ${err instanceof Error ? err.message : String(err)}`)
           .catch(() => {});
       });
-    return;
-  }
-
-  if (name === "approve") {
-    const id = opt("id")!;
-    const msg =
-      id === "all"
-        ? await approveAll(cfg.dataDir)
-        : (await applyPending(cfg.dataDir, id)).message;
-    await interaction.reply(
-      `${msg}\n\n_Note: Cursor SDK はシェル危険コマンドのホスト側承認イベントを露出しないため、/approve は memory/skills pending のみ対象です。_`,
-    );
-    return;
-  }
-
-  if (name === "deny") {
-    await interaction.reply((await rejectPending(cfg.dataDir, opt("id")!)).message);
-    return;
-  }
-
-  if (name === "honcho") {
-    const action = opt("action") || "list";
-    if (action === "add") {
-      const trait = opt("trait");
-      if (!trait) {
-        await interaction.reply("trait が必要です");
-        return;
-      }
-      await addTrait(cfg.dataDir, trait);
-      await interaction.reply("trait を追加しました");
-      return;
-    }
-    await interaction.reply(await formatUserModel(cfg.dataDir));
     return;
   }
 }
@@ -912,7 +844,6 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
 
   const busy = new Set<string>();
   const active = new Map<string, Active>();
-  const namedIndex = new Map<string, { key: string; agentId: string }>();
 
   const runTurn = async (args: {
     key: string;
@@ -991,7 +922,7 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
 
       const store = await loadSessionStore(cfg.dataDir);
       const meta = store[args.key];
-      const modelId = await resolveModel(cfg, cfg.dataDir, args.key);
+      const modelId = await resolveModel(cfg, cfg.dataDir, args.userId);
       const { agent, resumed } = await openAgent(
         agentOpts(cfg, modelId),
         meta?.agentId,
@@ -1006,7 +937,8 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
           combined,
           isFirst,
           {
-            sessionKey: args.key,
+            operatorId: args.userId,
+            conversationKey: args.key,
             images,
             onProgress,
             registerRun: (run) => {
@@ -1022,7 +954,8 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
         if (queued.length) {
           const follow = queued.join("\n");
           const second = await runUserTurn(agent, cfg.dataDir, follow, false, {
-            sessionKey: args.key,
+            operatorId: args.userId,
+            conversationKey: args.key,
             onProgress,
             registerRun: (run) => {
               active.set(args.key, { run, queue: [] });
@@ -1151,7 +1084,6 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
         interaction,
         busy,
         active,
-        namedIndex,
         runTurn,
       );
     } catch (err) {
@@ -1185,32 +1117,14 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
     const hasAtt = message.attachments.size > 0;
     if (!text && !hasAtt) return;
 
-    if (text === "/new") {
-      const key = sessionKeyForUser(message.author.id, message.channel);
-      const a = active.get(key);
-      if (a) {
-        a.queue.length = 0;
-        if (a.run.supports("cancel")) await a.run.cancel().catch(() => {});
-        active.delete(key);
-      }
-      busy.delete(key);
-      const prev = await clearSessionKey(cfg.dataDir, key);
-      await message.reply(
-        prev
-          ? `セッションを破棄しました（旧 \`${prev.agentId}\`）。次のメッセージで新規 create します。\n※ MEMORY/USER/skills は残ります。`
-          : "破棄するセッションはありませんでした。次のメッセージで新規 create します。",
-      );
-      return;
-    }
-
     if (text.startsWith("/")) {
       await message.reply(
-        "スラッシュコマンドは Discord の Application Command UI から実行してください（例外: チャットの `/new` はセッション破棄します）。",
+        "スラッシュコマンドは Discord の Application Command UI から実行してください。",
       );
       return;
     }
 
-    const key = sessionKeyForUser(message.author.id, message.channel);
+    const key = conversationKey(message.channel);
     await runTurn({
       key,
       userId: message.author.id,

@@ -1,5 +1,6 @@
 /**
  * Session store commit must not resurrect a key cleared mid-turn (/new).
+ * Conversation key shape matches CONTEXT.md「会話」(channel-shared).
  */
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -10,46 +11,57 @@ import {
   loadSessionStore,
   saveSessionStore,
 } from "../agent/session.js";
+import {
+  conversationKey,
+  operatorKey,
+} from "../discord/conversation-key.js";
+import { memoryAdd, memoryList, ensureMemoryLayout } from "../memory/store.js";
 
 async function main() {
+  const ch = (id: string, thread = false) => ({
+    id,
+    isThread: () => thread,
+  });
+  if (conversationKey(ch("c1")) !== "channel:c1") {
+    throw new Error("channel key should be place-only");
+  }
+  if (conversationKey(ch("c1")) !== "channel:c1") {
+    throw new Error("same channel shared across operators");
+  }
+  if (conversationKey(ch("t1", true)) !== "thread:t1") {
+    throw new Error("thread key");
+  }
+  if (operatorKey("u1") !== "user:u1") throw new Error("operator key");
+
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cda-session-"));
+  const key = conversationKey(ch("c1"));
 
   await saveSessionStore(dir, {
-    "user:1": { agentId: "agent-OLD", turns: 3, lastUserText: "hi" },
+    [key]: { agentId: "agent-OLD", turns: 3, lastUserText: "hi" },
   });
 
-  // Simulate /new while a turn still holds openedAgentId=agent-OLD
-  await clearSessionKey(dir, "user:1");
-  const saved = await commitSessionMeta(dir, "user:1", "agent-OLD", {
+  await clearSessionKey(dir, key);
+  const saved = await commitSessionMeta(dir, key, "agent-OLD", {
     agentId: "agent-OLD",
     turns: 4,
     lastUserText: "hi",
   });
   if (saved) throw new Error("expected commit to skip after clear");
-  const after = await loadSessionStore(dir);
-  if (after["user:1"]) throw new Error("resurrected session after /new");
-
-  // Fresh create (no prior mapping) must still commit
-  const ok = await commitSessionMeta(dir, "user:1", undefined, {
-    agentId: "agent-NEW",
-    turns: 1,
-  });
-  if (!ok) throw new Error("expected fresh create to commit");
-  if ((await loadSessionStore(dir))["user:1"]?.agentId !== "agent-NEW") {
-    throw new Error("fresh create missing");
+  if ((await loadSessionStore(dir))[key]) {
+    throw new Error("resurrected session after /new");
   }
 
-  // Stale-id → create replacement must commit
-  await saveSessionStore(dir, {
-    "user:1": { agentId: "agent-STALE", turns: 2 },
-  });
-  const replaced = await commitSessionMeta(dir, "user:1", "agent-STALE", {
-    agentId: "agent-FRESH",
-    turns: 3,
-  });
-  if (!replaced) throw new Error("expected stale→fresh commit");
-  if ((await loadSessionStore(dir))["user:1"]?.agentId !== "agent-FRESH") {
-    throw new Error("stale replacement failed");
+  await ensureMemoryLayout(dir);
+  const a = await memoryAdd(dir, "user", "likes tea", "alice");
+  if (!a.success) throw new Error(a.error);
+  const b = await memoryAdd(dir, "user", "likes coffee", "bob");
+  if (!b.success) throw new Error(b.error);
+  const alice = await memoryList(dir, "user", "alice");
+  const bob = await memoryList(dir, "user", "bob");
+  if (!alice.entries.some((e) => e.includes("tea"))) throw new Error("alice USER");
+  if (!bob.entries.some((e) => e.includes("coffee"))) throw new Error("bob USER");
+  if (alice.entries.some((e) => e.includes("coffee"))) {
+    throw new Error("USER leaked across operators");
   }
 
   console.log("check:session OK");

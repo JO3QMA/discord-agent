@@ -86,7 +86,6 @@ export function dataPaths(dataDir: string) {
   return {
     memoriesDir: path.join(dataDir, "memories"),
     memoryFile: path.join(dataDir, "memories", "MEMORY.md"),
-    userFile: path.join(dataDir, "memories", "USER.md"),
     skillsDir: path.join(dataDir, "skills"),
     sessionsFile: path.join(dataDir, "sessions.json"),
   };

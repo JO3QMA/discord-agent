@@ -26,13 +26,26 @@ function assertName(name: string): void {
   }
 }
 
-function parseFrontmatterDescription(raw: string): string {
-  if (!raw.startsWith("---")) return "";
+function assertSafeName(name: string): string {
+  const n = name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+  if (!n || n.length > 64) throw new Error("invalid skill name");
+  return n;
+}
+
+function parseFrontmatter(
+  raw: string,
+): { name?: string; description?: string; body: string } {
+  if (!raw.startsWith("---")) return { body: raw };
   const end = raw.indexOf("\n---", 3);
-  if (end < 0) return "";
+  if (end < 0) return { body: raw };
   const fm = raw.slice(3, end);
-  const m = /^description:\s*(.+)$/m.exec(fm);
-  return m?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
+  const nm = /^name:\s*(.+)$/m.exec(fm);
+  const dm = /^description:\s*(.+)$/m.exec(fm);
+  return {
+    name: nm?.[1]?.trim().replace(/^["']|["']$/g, ""),
+    description: dm?.[1]?.trim().replace(/^["']|["']$/g, ""),
+    body: raw.slice(end + 4).trim(),
+  };
 }
 
 export async function ensureSkillsLayout(dataDir: string): Promise<void> {
@@ -52,9 +65,10 @@ export async function listSkills(dataDir: string): Promise<SkillMeta[]> {
     const file = skillFile(dataDir, name);
     try {
       const raw = await fs.readFile(file, "utf8");
+      const fm = parseFrontmatter(raw);
       out.push({
         name,
-        description: parseFrontmatterDescription(raw) || "(no description)",
+        description: fm.description?.slice(0, 60) || "(no description)",
         path: file,
       });
     } catch {
@@ -133,4 +147,31 @@ export async function formatSkillsSummary(dataDir: string): Promise<string> {
   const skills = await listSkills(dataDir);
   if (!skills.length) return "_no skills_";
   return skills.map((s) => `- **${s.name}**: ${s.description}`).join("\n");
+}
+
+/** Install skill from a raw SKILL.md URL or local file path. */
+export async function installSkillFromSource(
+  dataDir: string,
+  source: string,
+  nameHint?: string,
+): Promise<{ name: string; path: string }> {
+  let raw: string;
+  if (/^https?:\/\//i.test(source)) {
+    const res = await fetch(source);
+    if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+    raw = await res.text();
+  } else {
+    raw = await fs.readFile(path.resolve(source), "utf8");
+  }
+
+  const fm = parseFrontmatter(raw);
+  let name = nameHint?.trim() || fm.name || "";
+  const description = (fm.description || "imported skill").slice(0, 60);
+  const body = fm.body;
+  name = assertSafeName(name || `skill-${Date.now().toString(36)}`);
+  const existing = await listSkills(dataDir);
+  if (existing.some((s) => s.name === name)) {
+    throw new Error(`skill ${name} already exists`);
+  }
+  return createSkill(dataDir, name, description, body);
 }

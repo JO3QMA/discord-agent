@@ -10,10 +10,10 @@ export type GatewaySettings = {
   voiceMode: VoiceMode;
   /** Bumped on /reload-mcp so callers know to recreate agents. */
   mcpGeneration: number;
-  /** Per Discord session key model override. */
-  modelBySession: Record<string, string>;
-  /** Personality name or relative path under data/personalities. */
-  personalityBySession: Record<string, string>;
+  /** Per Operator key model override. */
+  modelByOperator: Record<string, string>;
+  /** Personality name under data/personalities, keyed by Operator. */
+  personalityByOperator: Record<string, string>;
 };
 
 const DEFAULTS: GatewaySettings = {
@@ -21,8 +21,8 @@ const DEFAULTS: GatewaySettings = {
   skillsWriteApproval: false,
   voiceMode: "off",
   mcpGeneration: 0,
-  modelBySession: {},
-  personalityBySession: {},
+  modelByOperator: {},
+  personalityByOperator: {},
 };
 
 function settingsPath(dataDir: string): string {
@@ -32,7 +32,13 @@ function settingsPath(dataDir: string): string {
 export async function loadSettings(dataDir: string): Promise<GatewaySettings> {
   try {
     const raw = await fs.readFile(settingsPath(dataDir), "utf8");
-    return { ...DEFAULTS, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw) as Partial<GatewaySettings>;
+    return {
+      ...DEFAULTS,
+      ...parsed,
+      modelByOperator: parsed.modelByOperator ?? {},
+      personalityByOperator: parsed.personalityByOperator ?? {},
+    };
   } catch {
     return { ...DEFAULTS };
   }

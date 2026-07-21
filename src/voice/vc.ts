@@ -33,7 +33,7 @@ export function vcStatus(guildId: string): string {
 }
 
 export async function vcJoin(
-  client: Client,
+  _client: Client,
   member: GuildMember,
   dataDir: string,
   cbs: VcCallbacks,
@@ -83,7 +83,6 @@ export async function vcJoin(
       .catch((err) => console.error("vc listen:", err));
   });
 
-  void client;
   return `VC に参加しました: ${channel.name}`;
 }
 

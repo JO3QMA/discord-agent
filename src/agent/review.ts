@@ -4,7 +4,7 @@ import { collectAssistantText } from "./session.js";
 const REVIEW_PROMPT = `Learning review (Hermes-style). This is a background pass after the user turn.
 
 Rules:
-1. Use ONLY the memory-skills MCP tools for persistence (memory, skills_*, honcho_trait). Do not edit the workspace, run shell, or browse.
+1. Use ONLY the memory-skills MCP tools for persistence (memory, skills_*). Do not edit the workspace, run shell, or browse.
 2. If there is a durable preference, environment fact, correction, or reusable procedure worth keeping, write it via MCP.
 3. If nothing durable, do nothing with tools.
 4. Reply with exactly one short line for Discord notification:

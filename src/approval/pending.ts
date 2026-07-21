@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { loadSettings } from "../gateway/settings.js";
 
 export type PendingKind = "memory" | "skill";
 
@@ -84,12 +83,4 @@ export async function removePending(dataDir: string, id: string): Promise<boolea
   } catch {
     return false;
   }
-}
-
-export async function memoryGateOn(dataDir: string): Promise<boolean> {
-  return (await loadSettings(dataDir)).memoryWriteApproval;
-}
-
-export async function skillsGateOn(dataDir: string): Promise<boolean> {
-  return (await loadSettings(dataDir)).skillsWriteApproval;
 }

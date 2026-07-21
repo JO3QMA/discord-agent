@@ -60,8 +60,15 @@ async function applyPayload(dataDir: string, item: PendingWrite): Promise<void> 
   const p = item.payload;
   if (item.kind === "memory") {
     const target = p.target as "memory" | "user";
+    const operatorId =
+      typeof p.operatorId === "string" ? p.operatorId : undefined;
     if (item.action === "add") {
-      const r = await memoryAdd(dataDir, target, String(p.content ?? ""));
+      const r = await memoryAdd(
+        dataDir,
+        target,
+        String(p.content ?? ""),
+        operatorId,
+      );
       if (!r.success) throw new Error(r.error);
       return;
     }
@@ -71,12 +78,18 @@ async function applyPayload(dataDir: string, item: PendingWrite): Promise<void> 
         target,
         String(p.old_text ?? ""),
         String(p.content ?? ""),
+        operatorId,
       );
       if (!r.success) throw new Error(r.error);
       return;
     }
     if (item.action === "remove") {
-      const r = await memoryRemove(dataDir, target, String(p.old_text ?? ""));
+      const r = await memoryRemove(
+        dataDir,
+        target,
+        String(p.old_text ?? ""),
+        operatorId,
+      );
       if (!r.success) throw new Error(r.error);
       return;
     }

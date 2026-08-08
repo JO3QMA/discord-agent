@@ -68,9 +68,13 @@ export async function discardQueueWaiting(
   if (!message) return;
   try {
     await removeBotEmoji(message, QUEUE_REACT);
+  } catch (err) {
+    console.error("queue reaction discard remove:", err);
+  }
+  try {
     await message.react(TURN_REACT.fail);
   } catch (err) {
-    console.error("queue reaction discard:", err);
+    console.error("queue reaction discard add:", err);
   }
 }
 
@@ -177,6 +181,11 @@ export function selfCheckTurnReactions(): void {
     planQueueReaction(true, "discard"),
     { waiting: false, remove: "♾️", add: "❌" },
     "queue discard",
+  );
+  eqQ(
+    planQueueReaction(false, "discard"),
+    { waiting: false, add: "❌" },
+    "queue discard without waiting",
   );
 }
 

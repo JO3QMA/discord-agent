@@ -39,52 +39,70 @@ export function planQueueReaction(
   return _never;
 }
 
-async function removeBotEmoji(message: Message, emoji: string): Promise<void> {
+async function removeBotEmoji(
+  message: Message,
+  emoji: string,
+): Promise<boolean> {
   const botId = message.client.user?.id;
-  if (!botId) return;
-  const reaction = message.reactions.resolve(emoji);
-  if (!reaction) return;
+  if (!botId) return false;
+  // Discord may normalize away U+FE0F; try both forms.
+  const reaction =
+    message.reactions.resolve(emoji) ??
+    (emoji.includes("\uFE0F")
+      ? message.reactions.resolve(emoji.replaceAll("\uFE0F", ""))
+      : message.reactions.resolve(`${emoji}\uFE0F`));
+  if (!reaction) return false;
   await reaction.users.remove(botId);
+  return true;
 }
 
 export async function markQueueWaiting(
   message: Message | undefined,
-): Promise<void> {
-  if (!message) return;
+): Promise<boolean> {
+  if (!message) return true;
   try {
     await message.react(QUEUE_REACT);
+    return true;
   } catch (err) {
     console.error("queue reaction wait:", err);
+    return false;
   }
 }
 
 export async function clearQueueWaiting(
   message: Message | undefined,
-): Promise<void> {
-  if (!message) return;
+): Promise<boolean> {
+  if (!message) return true;
   try {
-    await removeBotEmoji(message, QUEUE_REACT);
+    return await removeBotEmoji(message, QUEUE_REACT);
   } catch (err) {
     console.error("queue reaction clear:", err);
+    return false;
   }
 }
 
 export async function discardQueueWaiting(
   message: Message | undefined,
-): Promise<void> {
-  if (!message) return;
+): Promise<boolean> {
+  if (!message) return true;
   // Add ❌ first so discard is visible even if ♾️ removal fails.
   // If add fails, leave ♾️ so the message is not left with no mark.
   try {
     await message.react(TURN_REACT.fail);
   } catch (err) {
     console.error("queue reaction discard add:", err);
-    return;
+    return false;
   }
   try {
-    await removeBotEmoji(message, QUEUE_REACT);
+    const removed = await removeBotEmoji(message, QUEUE_REACT);
+    if (!removed) {
+      console.error("queue reaction discard remove: ♾️ not found or not removed");
+      return false;
+    }
+    return true;
   } catch (err) {
     console.error("queue reaction discard remove:", err);
+    return false;
   }
 }
 
@@ -155,7 +173,11 @@ export function turnReactions(message: Message | undefined): TurnReactionHandle 
 }
 
 export function selfCheckTurnReactions(): void {
-  const eq = <T>(a: T, b: T, msg: string) => {
+  const eq = (
+    a: TurnReactPlan | QueueReactPlan,
+    b: TurnReactPlan | QueueReactPlan,
+    msg: string,
+  ) => {
     if (JSON.stringify(a) !== JSON.stringify(b)) {
       throw new Error(`${msg}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`);
     }

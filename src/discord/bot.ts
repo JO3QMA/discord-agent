@@ -89,8 +89,13 @@ type Active = {
 
 async function abandonQueuedTurns(queue: QueuedTurn[]): Promise<number> {
   const items = queue.splice(0, queue.length);
-  for (const item of items) {
-    await discardQueueWaiting(item.reactionMessage);
+  // Parallel: slash commands must reply within ~3s.
+  const results = await Promise.all(
+    items.map((item) => discardQueueWaiting(item.reactionMessage)),
+  );
+  const failed = results.filter((ok) => !ok).length;
+  if (failed) {
+    console.error(`abandonQueuedTurns: ${failed}/${items.length} UI discard incomplete`);
   }
   return items.length;
 }
@@ -452,6 +457,7 @@ async function handleSlash(
     const a = active.get(key);
     let discarded = 0;
     if (a) {
+      await interaction.deferReply();
       discarded = await abandonQueuedTurns(a.queue);
       if (a.run?.supports("cancel")) await a.run.cancel().catch(() => {});
       active.delete(key);
@@ -460,11 +466,11 @@ async function handleSlash(
     const prev = await clearSessionKey(cfg.dataDir, key);
     const queueNote =
       discarded > 0 ? `\n待ち ${discarded} 件を破棄しました。` : "";
-    await interaction.reply(
-      prev
-        ? `セッションを破棄しました（旧 \`${prev.agentId}\`）。次のメッセージで新規 create します。\n※ MEMORY/USER/skills は残ります。${queueNote}`
-        : `破棄するセッションはありませんでした。次のメッセージで新規 create します。${queueNote}`,
-    );
+    const body = prev
+      ? `セッションを破棄しました（旧 \`${prev.agentId}\`）。次のメッセージで新規 create します。\n※ MEMORY/USER/skills は残ります。${queueNote}`
+      : `破棄するセッションはありませんでした。次のメッセージで新規 create します。${queueNote}`;
+    if (interaction.deferred) await interaction.editReply(body);
+    else await interaction.reply(body);
     return;
   }
 
@@ -537,9 +543,10 @@ async function handleSlash(
       await interaction.reply({ content: "実行中のターンはありません。", ephemeral: true });
       return;
     }
+    await interaction.deferReply();
     const discarded = await abandonQueuedTurns(a.queue);
     if (a.run?.supports("cancel")) await a.run.cancel().catch(() => {});
-    await interaction.reply(
+    await interaction.editReply(
       discarded > 0
         ? `中断しました。待ち ${discarded} 件を破棄しました。`
         : "中断しました。",

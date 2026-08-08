@@ -27,6 +27,7 @@ import {
 } from "../agent/session.js";
 import { ensureMemoryLayout, formatMemorySummary } from "../memory/store.js";
 import { ensureSkillsLayout, formatSkillsSummary } from "../skills/store.js";
+import { turnReactions } from "./turn-reactions.js";
 import {
   indexMessage,
   searchMessages,
@@ -403,6 +404,7 @@ async function handleSlash(
     reply: (content: string) => Promise<void>;
     statusTarget?: Message | ChatInputCommandInteraction;
     attachmentsMessage?: Message;
+    reactionMessage?: Message;
   }) => Promise<void>,
 ): Promise<void> {
   if (!isAllowedUser(cfg, interaction.user.id)) {
@@ -853,6 +855,8 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
     reply: (content: string) => Promise<void>;
     statusTarget?: Message | ChatInputCommandInteraction;
     attachmentsMessage?: Message;
+    /** チャット入口のみ。ターン状態リアクションの付け先 */
+    reactionMessage?: Message;
   }) => {
     if (busy.has(args.key)) {
       const a = active.get(args.key);
@@ -866,6 +870,9 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
       return;
     }
     busy.add(args.key);
+
+    const reactions = turnReactions(args.reactionMessage);
+    await reactions.started();
 
     const statusRef: { msg: Message | null } = { msg: null };
     let lastStatus = "";
@@ -931,26 +938,25 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
       try {
         const isFirst = !resumed || !meta || meta.turns === 0;
         let combined = text;
-        const { text: answer, usage } = await runUserTurn(
-          agent,
-          cfg.dataDir,
-          combined,
-          isFirst,
-          {
-            operatorId: args.userId,
-            conversationKey: args.key,
-            images,
-            onProgress,
-            registerRun: (run) => {
-              active.set(args.key, { run, queue: [] });
-            },
+        const {
+          text: answer,
+          usage,
+          cancelled,
+        } = await runUserTurn(agent, cfg.dataDir, combined, isFirst, {
+          operatorId: args.userId,
+          conversationKey: args.key,
+          images,
+          onProgress,
+          registerRun: (run) => {
+            active.set(args.key, { run, queue: [] });
           },
-        );
+        });
 
         const queued = active.get(args.key)?.queue ?? [];
         active.delete(args.key);
 
         let finalAnswer = answer;
+        let stopped = cancelled && queued.length === 0;
         if (queued.length) {
           const follow = queued.join("\n");
           const second = await runUserTurn(agent, cfg.dataDir, follow, false, {
@@ -964,6 +970,7 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
           active.delete(args.key);
           finalAnswer = `${answer}\n\n---\n${second.text}`;
           combined = `${combined}\n${follow}`;
+          stopped = second.cancelled;
         }
 
         if (statusRef.msg) await statusRef.msg.delete().catch(() => {});
@@ -974,10 +981,16 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
           console.warn(
             `session ${args.key} cleared during turn (${meta?.agentId}); dropping reply`,
           );
+          await args.reply(
+            "エラー: セッションがターン中に消えたため返信を中止しました。",
+          );
+          await reactions.failed();
           return;
         }
 
         await args.reply(finalAnswer);
+        if (stopped) await reactions.failed();
+        else await reactions.succeeded();
 
         indexMessage(cfg.dataDir, args.key, "user", combined);
         indexMessage(cfg.dataDir, args.key, "assistant", finalAnswer);
@@ -1034,7 +1047,10 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
       }
     } catch (err) {
       console.error(err);
-      await args.reply(`エラー: ${err instanceof Error ? err.message : String(err)}`);
+      await args
+        .reply(`エラー: ${err instanceof Error ? err.message : String(err)}`)
+        .catch(() => {});
+      await reactions.failed();
     } finally {
       active.delete(args.key);
       busy.delete(args.key);
@@ -1132,6 +1148,7 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
       text: text || "(attachment only)",
       reply: (c) => replyMessage(message, c),
       attachmentsMessage: message,
+      reactionMessage: message,
     });
   });
 

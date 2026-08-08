@@ -538,7 +538,7 @@ async function handleSlash(
       return;
     }
     const discarded = await abandonQueuedTurns(a.queue);
-    if (a.run?.supports("cancel")) await a.run.cancel();
+    if (a.run?.supports("cancel")) await a.run.cancel().catch(() => {});
     await interaction.reply(
       discarded > 0
         ? `中断しました。待ち ${discarded} 件を破棄しました。`

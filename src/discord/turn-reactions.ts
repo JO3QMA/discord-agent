@@ -30,8 +30,13 @@ export function planQueueReaction(
     if (!waiting) return { waiting: false };
     return { waiting: false, remove: QUEUE_REACT };
   }
-  if (!waiting) return { waiting: false, add: TURN_REACT.fail };
-  return { waiting: false, remove: QUEUE_REACT, add: TURN_REACT.fail };
+  if (event === "discard") {
+    if (!waiting) return { waiting: false, add: TURN_REACT.fail };
+    return { waiting: false, remove: QUEUE_REACT, add: TURN_REACT.fail };
+  }
+  // Exhaustiveness guard for future event additions.
+  const _never: never = event;
+  return _never;
 }
 
 async function removeBotEmoji(message: Message, emoji: string): Promise<void> {
@@ -66,6 +71,8 @@ export async function discardQueueWaiting(
   message: Message | undefined,
 ): Promise<void> {
   if (!message) return;
+  // Prefer showing ❌ even if ♾️ removal fails (and vice versa): a stuck
+  // waiting mark without a terminal fail is worse than briefly having both.
   try {
     await removeBotEmoji(message, QUEUE_REACT);
   } catch (err) {
@@ -145,7 +152,7 @@ export function turnReactions(message: Message | undefined): TurnReactionHandle 
 }
 
 export function selfCheckTurnReactions(): void {
-  const eq = (a: TurnReactPlan, b: TurnReactPlan, msg: string) => {
+  const eq = (a: unknown, b: unknown, msg: string) => {
     if (JSON.stringify(a) !== JSON.stringify(b)) {
       throw new Error(`${msg}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`);
     }
@@ -165,24 +172,19 @@ export function selfCheckTurnReactions(): void {
   eq(planTurnReaction("none", "fail"), { phase: "terminal", add: "❌" }, "fail without start");
   eq(planTurnReaction("started", "start"), { phase: "started" }, "no double start");
 
-  const eqQ = (a: QueueReactPlan, b: QueueReactPlan, msg: string) => {
-    if (JSON.stringify(a) !== JSON.stringify(b)) {
-      throw new Error(`${msg}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`);
-    }
-  };
-  eqQ(planQueueReaction(false, "wait"), { waiting: true, add: "♾️" }, "queue wait");
-  eqQ(planQueueReaction(true, "wait"), { waiting: true }, "queue wait idempotent");
-  eqQ(
+  eq(planQueueReaction(false, "wait"), { waiting: true, add: "♾️" }, "queue wait");
+  eq(planQueueReaction(true, "wait"), { waiting: true }, "queue wait idempotent");
+  eq(
     planQueueReaction(true, "start"),
     { waiting: false, remove: "♾️" },
     "queue start clears",
   );
-  eqQ(
+  eq(
     planQueueReaction(true, "discard"),
     { waiting: false, remove: "♾️", add: "❌" },
     "queue discard",
   );
-  eqQ(
+  eq(
     planQueueReaction(false, "discard"),
     { waiting: false, add: "❌" },
     "queue discard without waiting",

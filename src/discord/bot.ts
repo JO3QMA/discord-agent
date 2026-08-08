@@ -27,7 +27,12 @@ import {
 } from "../agent/session.js";
 import { ensureMemoryLayout, formatMemorySummary } from "../memory/store.js";
 import { ensureSkillsLayout, formatSkillsSummary } from "../skills/store.js";
-import { turnReactions } from "./turn-reactions.js";
+import {
+  discardQueueWaiting,
+  clearQueueWaiting,
+  markQueueWaiting,
+  turnReactions,
+} from "./turn-reactions.js";
 import {
   indexMessage,
   searchMessages,
@@ -68,10 +73,27 @@ import { conversationKey, operatorKey } from "./conversation-key.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-type Active = {
-  run: Run;
-  queue: string[];
+type QueuedTurn = {
+  userId: string;
+  channel: TextBasedChannel;
+  text: string;
+  reply: (content: string) => Promise<void>;
+  attachmentsMessage?: Message;
+  reactionMessage?: Message;
 };
+
+type Active = {
+  run: Run | null;
+  queue: QueuedTurn[];
+};
+
+async function abandonQueuedTurns(queue: QueuedTurn[]): Promise<number> {
+  const items = queue.splice(0, queue.length);
+  for (const item of items) {
+    await discardQueueWaiting(item.reactionMessage);
+  }
+  return items.length;
+}
 
 const slashCommands = [
   new SlashCommandBuilder()
@@ -428,17 +450,20 @@ async function handleSlash(
 
   if (name === "new") {
     const a = active.get(key);
+    let discarded = 0;
     if (a) {
-      a.queue.length = 0;
-      if (a.run.supports("cancel")) await a.run.cancel().catch(() => {});
+      discarded = await abandonQueuedTurns(a.queue);
+      if (a.run?.supports("cancel")) await a.run.cancel().catch(() => {});
       active.delete(key);
     }
     busy.delete(key);
     const prev = await clearSessionKey(cfg.dataDir, key);
+    const queueNote =
+      discarded > 0 ? `\n待ち ${discarded} 件を破棄しました。` : "";
     await interaction.reply(
       prev
-        ? `セッションを破棄しました（旧 \`${prev.agentId}\`）。次のメッセージで新規 create します。\n※ MEMORY/USER/skills は残ります。`
-        : "破棄するセッションはありませんでした。次のメッセージで新規 create します。",
+        ? `セッションを破棄しました（旧 \`${prev.agentId}\`）。次のメッセージで新規 create します。\n※ MEMORY/USER/skills は残ります。${queueNote}`
+        : `破棄するセッションはありませんでした。次のメッセージで新規 create します。${queueNote}`,
     );
     return;
   }
@@ -512,9 +537,13 @@ async function handleSlash(
       await interaction.reply({ content: "実行中のターンはありません。", ephemeral: true });
       return;
     }
-    a.queue.length = 0;
-    if (a.run.supports("cancel")) await a.run.cancel();
-    await interaction.reply("中断しました。");
+    const discarded = await abandonQueuedTurns(a.queue);
+    if (a.run?.supports("cancel")) await a.run.cancel();
+    await interaction.reply(
+      discarded > 0
+        ? `中断しました。待ち ${discarded} 件を破棄しました。`
+        : "中断しました。",
+    );
     return;
   }
 
@@ -861,196 +890,236 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
     if (busy.has(args.key)) {
       const a = active.get(args.key);
       if (a) {
-        a.queue.push(args.text);
-        if (a.run.supports("cancel")) await a.run.cancel().catch(() => {});
-        await args.reply("割り込みを受け付けました（現在ターンを中断して結合します）。");
+        a.queue.push({
+          userId: args.userId,
+          channel: args.channel,
+          text: args.text,
+          reply: args.reply,
+          attachmentsMessage: args.attachmentsMessage,
+          reactionMessage: args.reactionMessage,
+        });
+        await markQueueWaiting(args.reactionMessage);
         return;
       }
       await args.reply("まだ前のターンを処理中です。");
       return;
     }
+
     busy.add(args.key);
+    active.set(args.key, { run: null, queue: [] });
 
-    const reactions = turnReactions(args.reactionMessage);
-    await reactions.started();
+    const executeOne = async (
+      turn: typeof args,
+    ): Promise<"cleared" | "done"> => {
+      const reactions = turnReactions(turn.reactionMessage);
+      await reactions.started();
 
-    const statusRef: { msg: Message | null } = { msg: null };
-    let lastStatus = "";
-    const onProgress = async (line: string) => {
-      if (line === lastStatus) return;
-      lastStatus = line;
-      try {
-        if (!statusRef.msg && "send" in args.channel) {
-          statusRef.msg = await (
-            args.channel as { send: (c: string) => Promise<Message> }
-          ).send(`⏳ ${line}`);
-        } else if (statusRef.msg) {
-          await statusRef.msg.edit(`⏳ ${line}`);
+      const statusRef: { msg: Message | null } = { msg: null };
+      let lastStatus = "";
+      const onProgress = async (line: string) => {
+        if (line === lastStatus) return;
+        lastStatus = line;
+        try {
+          if (!statusRef.msg && "send" in turn.channel) {
+            statusRef.msg = await (
+              turn.channel as { send: (c: string) => Promise<Message> }
+            ).send(`⏳ ${line}`);
+          } else if (statusRef.msg) {
+            await statusRef.msg.edit(`⏳ ${line}`);
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
+      };
+
+      try {
+        if ("sendTyping" in turn.channel) {
+          await turn.channel.sendTyping().catch(() => {});
+        }
+
+        let text = turn.text;
+        let images: Array<{ data: string; mimeType: string }> | undefined;
+        if (turn.attachmentsMessage) {
+          const prepared = await prepareMessageAttachments(
+            turn.attachmentsMessage,
+            cfg.agentCwd,
+          );
+          text += prepared.promptExtra;
+          images = prepared.images.length ? prepared.images : undefined;
+
+          const voiceAtt = [...turn.attachmentsMessage.attachments.values()].find(
+            isVoiceAttachment,
+          );
+          if (voiceAtt) {
+            const vcfg = voiceConfigFromEnv();
+            if (vcfg) {
+              const dir = path.join(
+                cfg.agentCwd,
+                "attachments",
+                turn.attachmentsMessage.id,
+              );
+              const dest = path.join(dir, voiceAtt.name.replace(/[^\w.\-]+/g, "_"));
+              await fs.mkdir(dir, { recursive: true });
+              const res = await fetch(voiceAtt.url);
+              await fs.writeFile(dest, Buffer.from(await res.arrayBuffer()));
+              const wav = await toWavIfNeeded(dest, dir);
+              const transcript = await transcribeFile(vcfg, wav);
+              if (transcript) {
+                text = `${text}\n\n[Voice transcript]\n${transcript}`.trim();
+              }
+            } else {
+              text +=
+                "\n\n[Voice attachment present but VOICE_API_KEY/OPENAI_API_KEY unset]";
+            }
+          }
+        }
+
+        const store = await loadSessionStore(cfg.dataDir);
+        const meta = store[turn.key];
+        const modelId = await resolveModel(cfg, cfg.dataDir, turn.userId);
+        const { agent, resumed } = await openAgent(
+          agentOpts(cfg, modelId),
+          meta?.agentId,
+        );
+
+        try {
+          const isFirst = !resumed || !meta || meta.turns === 0;
+          const {
+            text: answer,
+            usage,
+            cancelled,
+          } = await runUserTurn(agent, cfg.dataDir, text, isFirst, {
+            operatorId: turn.userId,
+            conversationKey: turn.key,
+            images,
+            onProgress,
+            registerRun: (run) => {
+              const cur = active.get(turn.key);
+              if (cur) cur.run = run;
+              else active.set(turn.key, { run, queue: [] });
+            },
+          });
+
+          const cur = active.get(turn.key);
+          if (cur) cur.run = null;
+
+          if (statusRef.msg) await statusRef.msg.delete().catch(() => {});
+
+          const latestAfter = await loadSessionStore(cfg.dataDir);
+          const clearedMidTurn = Boolean(meta?.agentId && !latestAfter[turn.key]);
+          if (clearedMidTurn) {
+            console.warn(
+              `session ${turn.key} cleared during turn (${meta?.agentId}); dropping reply`,
+            );
+            await turn.reply(
+              "エラー: セッションがターン中に消えたため返信を中止しました。",
+            );
+            await reactions.failed();
+            return "cleared";
+          }
+
+          await turn.reply(answer);
+          if (cancelled) await reactions.failed();
+          else await reactions.succeeded();
+
+          indexMessage(cfg.dataDir, turn.key, "user", text);
+          indexMessage(cfg.dataDir, turn.key, "assistant", answer);
+
+          let reviewLine = "No memory changes";
+          try {
+            reviewLine = await runPostTurnReview(agent);
+          } catch (err) {
+            console.error("post-turn review failed:", err);
+            reviewLine = "Review failed";
+          }
+
+          const nextMeta: SessionMeta = {
+            agentId: agent.agentId,
+            turns: (meta?.turns ?? 0) + 1,
+            title: meta?.title,
+            lastUserText: text,
+            inputTokens: (meta?.inputTokens ?? 0) + (usage?.input ?? 0),
+            outputTokens: (meta?.outputTokens ?? 0) + (usage?.output ?? 0),
+          };
+          const saved = await commitSessionMeta(
+            cfg.dataDir,
+            turn.key,
+            meta?.agentId,
+            nextMeta,
+          );
+          if (!saved) {
+            console.warn(
+              `session ${turn.key} was cleared/replaced during turn; not writing ${agent.agentId}`,
+            );
+          }
+
+          if (cfg.memoryNotifications === "on") {
+            await turn.reply(`💾 ${reviewLine}`);
+          }
+
+          const settings = await loadSettings(cfg.dataDir);
+          if (
+            settings.voiceMode === "tts" ||
+            (settings.voiceMode === "voice_only" &&
+              turn.attachmentsMessage &&
+              [...turn.attachmentsMessage.attachments.values()].some(
+                isVoiceAttachment,
+              ))
+          ) {
+            const vcfg = voiceConfigFromEnv();
+            if (vcfg && "send" in turn.channel) {
+              try {
+                const out = path.join(
+                  cfg.dataDir,
+                  "voice-tmp",
+                  `reply-${Date.now()}.mp3`,
+                );
+                await synthesizeSpeech(vcfg, answer.slice(0, 1500), out);
+                await turn.channel.send({
+                  files: [new AttachmentBuilder(out)],
+                });
+              } catch (err) {
+                console.error("tts reply:", err);
+              }
+            }
+          }
+        } finally {
+          await agent.close();
+        }
+        return "done";
+      } catch (err) {
+        console.error(err);
+        if (statusRef.msg) await statusRef.msg.delete().catch(() => {});
+        await turn
+          .reply(`エラー: ${err instanceof Error ? err.message : String(err)}`)
+          .catch(() => {});
+        await reactions.failed();
+        const cur = active.get(turn.key);
+        if (cur) cur.run = null;
+        return "done";
       }
     };
 
     try {
-      if ("sendTyping" in args.channel) {
-        await args.channel.sendTyping().catch(() => {});
-      }
-
-      let text = args.text;
-      let images: Array<{ data: string; mimeType: string }> | undefined;
-      if (args.attachmentsMessage) {
-        const prepared = await prepareMessageAttachments(
-          args.attachmentsMessage,
-          cfg.agentCwd,
-        );
-        text += prepared.promptExtra;
-        images = prepared.images.length ? prepared.images : undefined;
-
-        const voiceAtt = [...args.attachmentsMessage.attachments.values()].find(
-          isVoiceAttachment,
-        );
-        if (voiceAtt) {
-          const vcfg = voiceConfigFromEnv();
-          if (vcfg) {
-            const dir = path.join(cfg.agentCwd, "attachments", args.attachmentsMessage.id);
-            const dest = path.join(dir, voiceAtt.name.replace(/[^\w.\-]+/g, "_"));
-            await fs.mkdir(dir, { recursive: true });
-            const res = await fetch(voiceAtt.url);
-            await fs.writeFile(dest, Buffer.from(await res.arrayBuffer()));
-            const wav = await toWavIfNeeded(dest, dir);
-            const transcript = await transcribeFile(vcfg, wav);
-            if (transcript) text = `${text}\n\n[Voice transcript]\n${transcript}`.trim();
-          } else {
-            text += "\n\n[Voice attachment present but VOICE_API_KEY/OPENAI_API_KEY unset]";
+      let current = args;
+      let fromQueue = false;
+      for (;;) {
+        if (fromQueue) await clearQueueWaiting(current.reactionMessage);
+        const outcome = await executeOne(current);
+        if (outcome === "cleared") {
+          const a = active.get(args.key);
+          const n = a ? await abandonQueuedTurns(a.queue) : 0;
+          if (n > 0) {
+            await current.reply(`待ち ${n} 件を破棄しました。`).catch(() => {});
           }
+          break;
         }
+        const a = active.get(args.key);
+        if (!a || a.queue.length === 0) break;
+        const next = a.queue.shift()!;
+        current = { key: args.key, ...next };
+        fromQueue = true;
       }
-
-      const store = await loadSessionStore(cfg.dataDir);
-      const meta = store[args.key];
-      const modelId = await resolveModel(cfg, cfg.dataDir, args.userId);
-      const { agent, resumed } = await openAgent(
-        agentOpts(cfg, modelId),
-        meta?.agentId,
-      );
-
-      try {
-        const isFirst = !resumed || !meta || meta.turns === 0;
-        let combined = text;
-        const {
-          text: answer,
-          usage,
-          cancelled,
-        } = await runUserTurn(agent, cfg.dataDir, combined, isFirst, {
-          operatorId: args.userId,
-          conversationKey: args.key,
-          images,
-          onProgress,
-          registerRun: (run) => {
-            active.set(args.key, { run, queue: [] });
-          },
-        });
-
-        const queued = active.get(args.key)?.queue ?? [];
-        active.delete(args.key);
-
-        let finalAnswer = answer;
-        let stopped = cancelled && queued.length === 0;
-        if (queued.length) {
-          const follow = queued.join("\n");
-          const second = await runUserTurn(agent, cfg.dataDir, follow, false, {
-            operatorId: args.userId,
-            conversationKey: args.key,
-            onProgress,
-            registerRun: (run) => {
-              active.set(args.key, { run, queue: [] });
-            },
-          });
-          active.delete(args.key);
-          finalAnswer = `${answer}\n\n---\n${second.text}`;
-          combined = `${combined}\n${follow}`;
-          stopped = second.cancelled;
-        }
-
-        if (statusRef.msg) await statusRef.msg.delete().catch(() => {});
-
-        const latestAfter = await loadSessionStore(cfg.dataDir);
-        const clearedMidTurn = Boolean(meta?.agentId && !latestAfter[args.key]);
-        if (clearedMidTurn) {
-          console.warn(
-            `session ${args.key} cleared during turn (${meta?.agentId}); dropping reply`,
-          );
-          await args.reply(
-            "エラー: セッションがターン中に消えたため返信を中止しました。",
-          );
-          await reactions.failed();
-          return;
-        }
-
-        await args.reply(finalAnswer);
-        if (stopped) await reactions.failed();
-        else await reactions.succeeded();
-
-        indexMessage(cfg.dataDir, args.key, "user", combined);
-        indexMessage(cfg.dataDir, args.key, "assistant", finalAnswer);
-
-        let reviewLine = "No memory changes";
-        try {
-          reviewLine = await runPostTurnReview(agent);
-        } catch (err) {
-          console.error("post-turn review failed:", err);
-          reviewLine = "Review failed";
-        }
-
-        const nextMeta: SessionMeta = {
-          agentId: agent.agentId,
-          turns: (meta?.turns ?? 0) + 1,
-          title: meta?.title,
-          lastUserText: combined,
-          inputTokens: (meta?.inputTokens ?? 0) + (usage?.input ?? 0),
-          outputTokens: (meta?.outputTokens ?? 0) + (usage?.output ?? 0),
-        };
-        const saved = await commitSessionMeta(
-          cfg.dataDir,
-          args.key,
-          meta?.agentId,
-          nextMeta,
-        );
-        if (!saved) {
-          console.warn(
-            `session ${args.key} was cleared/replaced during turn; not writing ${agent.agentId}`,
-          );
-        }
-
-        if (cfg.memoryNotifications === "on") {
-          await args.reply(`💾 ${reviewLine}`);
-        }
-
-        const settings = await loadSettings(cfg.dataDir);
-        if (settings.voiceMode === "tts" || (settings.voiceMode === "voice_only" && args.attachmentsMessage && [...args.attachmentsMessage.attachments.values()].some(isVoiceAttachment))) {
-          const vcfg = voiceConfigFromEnv();
-          if (vcfg && "send" in args.channel) {
-            try {
-              const out = path.join(cfg.dataDir, "voice-tmp", `reply-${Date.now()}.mp3`);
-              await synthesizeSpeech(vcfg, finalAnswer.slice(0, 1500), out);
-              await args.channel.send({
-                files: [new AttachmentBuilder(out)],
-              });
-            } catch (err) {
-              console.error("tts reply:", err);
-            }
-          }
-        }
-      } finally {
-        await agent.close();
-      }
-    } catch (err) {
-      console.error(err);
-      await args
-        .reply(`エラー: ${err instanceof Error ? err.message : String(err)}`)
-        .catch(() => {});
-      await reactions.failed();
     } finally {
       active.delete(args.key);
       busy.delete(args.key);

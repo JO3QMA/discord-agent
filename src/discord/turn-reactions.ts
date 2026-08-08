@@ -8,6 +8,72 @@ export const TURN_REACT = {
   fail: "❌",
 } as const;
 
+/** CONTEXT.md「キュー待ちリアクション」 — Discord `:infinity:` */
+export const QUEUE_REACT = "♾️";
+
+export type QueueReactPlan = {
+  waiting: boolean;
+  remove?: string;
+  add?: string;
+};
+
+/** Discord を触らない状態遷移。テスト用にも使う。 */
+export function planQueueReaction(
+  waiting: boolean,
+  event: "wait" | "start" | "discard",
+): QueueReactPlan {
+  if (event === "wait") {
+    if (waiting) return { waiting };
+    return { waiting: true, add: QUEUE_REACT };
+  }
+  if (event === "start") {
+    if (!waiting) return { waiting: false };
+    return { waiting: false, remove: QUEUE_REACT };
+  }
+  if (!waiting) return { waiting: false, add: TURN_REACT.fail };
+  return { waiting: false, remove: QUEUE_REACT, add: TURN_REACT.fail };
+}
+
+async function removeBotEmoji(message: Message, emoji: string): Promise<void> {
+  const botId = message.client.user?.id;
+  if (!botId) return;
+  await message.reactions.resolve(emoji)?.users.remove(botId);
+}
+
+export async function markQueueWaiting(
+  message: Message | undefined,
+): Promise<void> {
+  if (!message) return;
+  try {
+    await message.react(QUEUE_REACT);
+  } catch (err) {
+    console.error("queue reaction wait:", err);
+  }
+}
+
+export async function clearQueueWaiting(
+  message: Message | undefined,
+): Promise<void> {
+  if (!message) return;
+  try {
+    await removeBotEmoji(message, QUEUE_REACT);
+  } catch (err) {
+    console.error("queue reaction clear:", err);
+  }
+}
+
+export async function discardQueueWaiting(
+  message: Message | undefined,
+): Promise<void> {
+  if (!message) return;
+  try {
+    await removeBotEmoji(message, QUEUE_REACT);
+    await message.react(TURN_REACT.fail);
+  } catch (err) {
+    console.error("queue reaction discard:", err);
+  }
+}
+
 export type TurnReactPhase = "none" | "started" | "terminal";
 
 export type TurnReactPlan = {
@@ -94,6 +160,24 @@ export function selfCheckTurnReactions(): void {
   eq(planTurnReaction("terminal", "ok"), { phase: "terminal" }, "idempotent ok");
   eq(planTurnReaction("none", "fail"), { phase: "terminal", add: "❌" }, "fail without start");
   eq(planTurnReaction("started", "start"), { phase: "started" }, "no double start");
+
+  const eqQ = (a: QueueReactPlan, b: QueueReactPlan, msg: string) => {
+    if (JSON.stringify(a) !== JSON.stringify(b)) {
+      throw new Error(`${msg}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`);
+    }
+  };
+  eqQ(planQueueReaction(false, "wait"), { waiting: true, add: "♾️" }, "queue wait");
+  eqQ(planQueueReaction(true, "wait"), { waiting: true }, "queue wait idempotent");
+  eqQ(
+    planQueueReaction(true, "start"),
+    { waiting: false, remove: "♾️" },
+    "queue start clears",
+  );
+  eqQ(
+    planQueueReaction(true, "discard"),
+    { waiting: false, remove: "♾️", add: "❌" },
+    "queue discard",
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

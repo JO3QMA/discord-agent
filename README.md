@@ -55,12 +55,12 @@ docker compose up -d
 
 | コマンド | 意味 |
 |----------|------|
-| 通常メッセージ | Cursor agent → 返信 → 学習レビュー（添付・音声メモ可） |
-| `/new` | この会話の Cursor **セッション**破棄（実行中なら中断。次メッセージで create） |
+| 通常メッセージ | Cursor agent → 返信 → 学習レビュー（添付・音声メモ可）。処理中の後続はターンキュー（♾️）で FIFO |
+| `/new` | この会話の Cursor **セッション**破棄（実行中なら中断・待ち破棄。次メッセージで create） |
 | `/memory` | 表示 / pending / approve / reject / approval on\|off |
 | `/skills` | list / install / pending / approve / reject / approval |
 | `/search` | 過去の会話ログ FTS5 検索 |
-| `/stop` `/retry` `/undo` | 中断・再送・ローカル undo + セッションリセット |
+| `/stop` `/retry` `/undo` | 中断（待ちも破棄）・再送・ローカル undo + セッションリセット |
 | `/title` `/sessions` `/resume` | 会話タイトル |
 | `/personality` | `data/personalities/*.md` + `SOUL.md` |
 | `/model` `/usage` | モデル切替・概算トークン |

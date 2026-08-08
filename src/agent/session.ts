@@ -256,7 +256,11 @@ export type TurnProgress = (line: string) => void | Promise<void>;
 export async function collectAssistantText(
   run: Run,
   onProgress?: TurnProgress,
-): Promise<{ text: string; usage?: { input?: number; output?: number } }> {
+): Promise<{
+  text: string;
+  usage?: { input?: number; output?: number };
+  cancelled: boolean;
+}> {
   const chunks: string[] = [];
   let usage: { input?: number; output?: number } | undefined;
   for await (const event of run.stream()) {
@@ -275,7 +279,7 @@ export async function collectAssistantText(
   }
   const result = await run.wait();
   if (result.status === "cancelled") {
-    return { text: chunks.join("") || "(cancelled)", usage };
+    return { text: chunks.join("") || "(cancelled)", usage, cancelled: true };
   }
   if (result.status === "error") {
     throw new Error(`agent run failed: ${result.error?.message ?? result.id}`);
@@ -286,7 +290,11 @@ export async function collectAssistantText(
       output: result.usage.outputTokens,
     };
   }
-  return { text: chunks.join("") || result.result || "(no assistant text)", usage };
+  return {
+    text: chunks.join("") || result.result || "(no assistant text)",
+    usage,
+    cancelled: false,
+  };
 }
 
 async function handleProgress(
@@ -315,7 +323,12 @@ export async function runUserTurn(
     onProgress?: TurnProgress;
     registerRun?: (run: Run) => void;
   },
-): Promise<{ text: string; usage?: { input?: number; output?: number }; run: Run }> {
+): Promise<{
+  text: string;
+  usage?: { input?: number; output?: number };
+  cancelled: boolean;
+  run: Run;
+}> {
   if (!opts?.operatorId) {
     throw new Error("operatorId is required for runUserTurn");
   }

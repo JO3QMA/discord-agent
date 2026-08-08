@@ -89,7 +89,7 @@ type Active = {
 
 async function abandonQueuedTurns(queue: QueuedTurn[]): Promise<number> {
   const items = queue.splice(0, queue.length);
-  // Parallel: slash commands must reply within ~3s.
+  // Clean up UI reactions in parallel for speed.
   const results = await Promise.all(
     items.map((item) => discardQueueWaiting(item.reactionMessage)),
   );
@@ -1008,14 +1008,15 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
             images,
             onProgress,
             registerRun: (run) => {
+              // Ignore stale callbacks after /new replaced this turn.
+              if ((turnEpoch.get(turn.key) ?? 0) !== epoch) return;
               const cur = active.get(turn.key);
               if (cur) cur.run = run;
-              else active.set(turn.key, { run, queue: [] });
             },
           });
 
           const cur = active.get(turn.key);
-          if (cur) cur.run = null;
+          if (cur && (turnEpoch.get(turn.key) ?? 0) === epoch) cur.run = null;
 
           if (statusRef.msg) await statusRef.msg.delete().catch(() => {});
 
@@ -1109,7 +1110,7 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
           .catch(() => {});
         await reactions.failed();
         const cur = active.get(turn.key);
-        if (cur) cur.run = null;
+        if (cur && (turnEpoch.get(turn.key) ?? 0) === epoch) cur.run = null;
         return "done";
       }
     };
@@ -1138,6 +1139,7 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
       if ((turnEpoch.get(args.key) ?? 0) === epoch) {
         active.delete(args.key);
         busy.delete(args.key);
+        turnEpoch.delete(args.key);
       }
     }
   };

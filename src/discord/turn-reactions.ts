@@ -35,8 +35,7 @@ export function planQueueReaction(
     return { waiting: false, remove: QUEUE_REACT, add: TURN_REACT.fail };
   }
   // Exhaustiveness guard for future event additions.
-  const _never: never = event;
-  return _never;
+  throw new Error(`Unexpected queue event: ${String(event)}`);
 }
 
 async function removeBotEmoji(

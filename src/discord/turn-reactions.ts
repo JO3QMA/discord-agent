@@ -42,7 +42,9 @@ export function planQueueReaction(
 async function removeBotEmoji(message: Message, emoji: string): Promise<void> {
   const botId = message.client.user?.id;
   if (!botId) return;
-  await message.reactions.resolve(emoji)?.users.remove(botId);
+  const reaction = message.reactions.resolve(emoji);
+  if (!reaction) return;
+  await reaction.users.remove(botId);
 }
 
 export async function markQueueWaiting(
@@ -71,17 +73,18 @@ export async function discardQueueWaiting(
   message: Message | undefined,
 ): Promise<void> {
   if (!message) return;
-  // Prefer showing ❌ even if ♾️ removal fails (and vice versa): a stuck
-  // waiting mark without a terminal fail is worse than briefly having both.
-  try {
-    await removeBotEmoji(message, QUEUE_REACT);
-  } catch (err) {
-    console.error("queue reaction discard remove:", err);
-  }
+  // Add ❌ first so discard is visible even if ♾️ removal fails.
+  // If add fails, leave ♾️ so the message is not left with no mark.
   try {
     await message.react(TURN_REACT.fail);
   } catch (err) {
     console.error("queue reaction discard add:", err);
+    return;
+  }
+  try {
+    await removeBotEmoji(message, QUEUE_REACT);
+  } catch (err) {
+    console.error("queue reaction discard remove:", err);
   }
 }
 
@@ -152,7 +155,7 @@ export function turnReactions(message: Message | undefined): TurnReactionHandle 
 }
 
 export function selfCheckTurnReactions(): void {
-  const eq = (a: unknown, b: unknown, msg: string) => {
+  const eq = <T>(a: T, b: T, msg: string) => {
     if (JSON.stringify(a) !== JSON.stringify(b)) {
       throw new Error(`${msg}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`);
     }

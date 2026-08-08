@@ -8,6 +8,110 @@ export const TURN_REACT = {
   fail: "❌",
 } as const;
 
+/** CONTEXT.md「キュー待ちリアクション」 — Discord `:infinity:` */
+export const QUEUE_REACT = "♾️";
+
+export type QueueReactPlan = {
+  waiting: boolean;
+  remove?: string;
+  add?: string;
+};
+
+/** Discord を触らない状態遷移。テスト用にも使う。 */
+export function planQueueReaction(
+  waiting: boolean,
+  event: "wait" | "start" | "discard",
+): QueueReactPlan {
+  if (event === "wait") {
+    if (waiting) return { waiting };
+    return { waiting: true, add: QUEUE_REACT };
+  }
+  if (event === "start") {
+    if (!waiting) return { waiting: false };
+    return { waiting: false, remove: QUEUE_REACT };
+  }
+  if (event === "discard") {
+    if (!waiting) return { waiting: false, add: TURN_REACT.fail };
+    return { waiting: false, remove: QUEUE_REACT, add: TURN_REACT.fail };
+  }
+  // Exhaustiveness guard for future event additions.
+  throw new Error(`Unexpected queue event: ${String(event)}`);
+}
+
+async function removeBotEmoji(
+  message: Message,
+  emoji: string,
+): Promise<boolean> {
+  const botId = message.client.user?.id;
+  if (!botId) return false;
+  // Discord may normalize away U+FE0F; try both forms.
+  const reaction =
+    message.reactions.resolve(emoji) ??
+    (emoji.includes("\uFE0F")
+      ? message.reactions.resolve(emoji.replaceAll("\uFE0F", ""))
+      : message.reactions.resolve(`${emoji}\uFE0F`));
+  if (!reaction) return false;
+  await reaction.users.remove(botId);
+  return true;
+}
+
+export async function markQueueWaiting(
+  message: Message | undefined,
+): Promise<boolean> {
+  if (!message) return false;
+  try {
+    await message.react(QUEUE_REACT);
+    return true;
+  } catch (err) {
+    console.error("queue reaction wait:", err);
+    return false;
+  }
+}
+
+export async function clearQueueWaiting(
+  message: Message | undefined,
+): Promise<boolean> {
+  if (!message) return false;
+  try {
+    return await removeBotEmoji(message, QUEUE_REACT);
+  } catch (err) {
+    console.error("queue reaction clear:", err);
+    return false;
+  }
+}
+
+export async function discardQueueWaiting(
+  message: Message | undefined,
+): Promise<boolean> {
+  if (!message) return false;
+  // Add ❌ first so discard is visible even if ♾️ removal fails.
+  // If add fails, leave ♾️ so the message is not left with no mark.
+  // Do not remove-first: that can leave the message with no mark at all.
+  try {
+    await message.react(TURN_REACT.fail);
+  } catch (err) {
+    console.error("queue reaction discard add:", err);
+    return false;
+  }
+  try {
+    let removed = await removeBotEmoji(message, QUEUE_REACT);
+    if (!removed) {
+      await new Promise((r) => setTimeout(r, 250));
+      removed = await removeBotEmoji(message, QUEUE_REACT);
+    }
+    if (!removed) {
+      console.error(
+        "queue reaction discard remove: ♾️ still present after retry; ❌ kept",
+      );
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error("queue reaction discard remove:", err);
+    return false;
+  }
+}
+
 export type TurnReactPhase = "none" | "started" | "terminal";
 
 export type TurnReactPlan = {
@@ -54,12 +158,7 @@ export function turnReactions(message: Message | undefined): TurnReactionHandle 
     const plan = planTurnReaction(phase, event);
     if (!plan.add && !plan.remove) return;
     try {
-      if (plan.remove) {
-        const botId = message.client.user?.id;
-        if (botId) {
-          await message.reactions.resolve(plan.remove)?.users.remove(botId);
-        }
-      }
+      if (plan.remove) await removeBotEmoji(message, plan.remove);
       if (plan.add) await message.react(plan.add);
       phase = plan.phase;
     } catch (err) {
@@ -75,7 +174,11 @@ export function turnReactions(message: Message | undefined): TurnReactionHandle 
 }
 
 export function selfCheckTurnReactions(): void {
-  const eq = (a: TurnReactPlan, b: TurnReactPlan, msg: string) => {
+  const eq = (
+    a: TurnReactPlan | QueueReactPlan,
+    b: TurnReactPlan | QueueReactPlan,
+    msg: string,
+  ) => {
     if (JSON.stringify(a) !== JSON.stringify(b)) {
       throw new Error(`${msg}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`);
     }
@@ -94,6 +197,29 @@ export function selfCheckTurnReactions(): void {
   eq(planTurnReaction("terminal", "ok"), { phase: "terminal" }, "idempotent ok");
   eq(planTurnReaction("none", "fail"), { phase: "terminal", add: "❌" }, "fail without start");
   eq(planTurnReaction("started", "start"), { phase: "started" }, "no double start");
+
+  eq(planQueueReaction(false, "wait"), { waiting: true, add: "♾️" }, "queue wait");
+  eq(planQueueReaction(true, "wait"), { waiting: true }, "queue wait idempotent");
+  eq(
+    planQueueReaction(true, "start"),
+    { waiting: false, remove: "♾️" },
+    "queue start clears",
+  );
+  eq(
+    planQueueReaction(true, "discard"),
+    { waiting: false, remove: "♾️", add: "❌" },
+    "queue discard",
+  );
+  eq(
+    planQueueReaction(false, "discard"),
+    { waiting: false, add: "❌" },
+    "queue discard without waiting",
+  );
+  eq(
+    planQueueReaction(false, "start"),
+    { waiting: false },
+    "queue start idempotent",
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

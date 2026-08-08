@@ -423,6 +423,7 @@ async function handleSlash(
   interaction: ChatInputCommandInteraction,
   busy: Set<string>,
   active: Map<string, Active>,
+  turnEpoch: Map<string, number>,
   runTurn: (args: {
     key: string;
     userId: string;
@@ -460,9 +461,12 @@ async function handleSlash(
       await interaction.deferReply();
       discarded = await abandonQueuedTurns(a.queue);
       if (a.run?.supports("cancel")) await a.run.cancel().catch(() => {});
-      active.delete(key);
     }
+    // busy before active: avoid busy∧¬active → "まだ前のターンを処理中です。"
+    // Epoch bump: cancelled turn's finally must not clear a replacement turn.
+    turnEpoch.set(key, (turnEpoch.get(key) ?? 0) + 1);
     busy.delete(key);
+    active.delete(key);
     const prev = await clearSessionKey(cfg.dataDir, key);
     const queueNote =
       discarded > 0 ? `\n待ち ${discarded} 件を破棄しました。` : "";
@@ -882,6 +886,8 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
 
   const busy = new Set<string>();
   const active = new Map<string, Active>();
+  /** Bumped by /new so a cancelled turn's finally won't clear a replacement turn. */
+  const turnEpoch = new Map<string, number>();
 
   const runTurn = async (args: {
     key: string;
@@ -914,6 +920,7 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
 
     busy.add(args.key);
     active.set(args.key, { run: null, queue: [] });
+    const epoch = turnEpoch.get(args.key) ?? 0;
 
     const executeOne = async (
       turn: typeof args,
@@ -1128,8 +1135,10 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
         fromQueue = true;
       }
     } finally {
-      active.delete(args.key);
-      busy.delete(args.key);
+      if ((turnEpoch.get(args.key) ?? 0) === epoch) {
+        active.delete(args.key);
+        busy.delete(args.key);
+      }
     }
   };
 
@@ -1176,6 +1185,7 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
         interaction,
         busy,
         active,
+        turnEpoch,
         runTurn,
       );
     } catch (err) {

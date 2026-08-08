@@ -87,6 +87,7 @@ export async function discardQueueWaiting(
   if (!message) return true;
   // Add ❌ first so discard is visible even if ♾️ removal fails.
   // If add fails, leave ♾️ so the message is not left with no mark.
+  // Do not remove-first: that can leave the message with no mark at all.
   try {
     await message.react(TURN_REACT.fail);
   } catch (err) {
@@ -94,9 +95,15 @@ export async function discardQueueWaiting(
     return false;
   }
   try {
-    const removed = await removeBotEmoji(message, QUEUE_REACT);
+    let removed = await removeBotEmoji(message, QUEUE_REACT);
     if (!removed) {
-      console.error("queue reaction discard remove: ♾️ not found or not removed");
+      await new Promise((r) => setTimeout(r, 250));
+      removed = await removeBotEmoji(message, QUEUE_REACT);
+    }
+    if (!removed) {
+      console.error(
+        "queue reaction discard remove: ♾️ still present after retry; ❌ kept",
+      );
       return false;
     }
     return true;
@@ -152,12 +159,7 @@ export function turnReactions(message: Message | undefined): TurnReactionHandle 
     const plan = planTurnReaction(phase, event);
     if (!plan.add && !plan.remove) return;
     try {
-      if (plan.remove) {
-        const botId = message.client.user?.id;
-        if (botId) {
-          await message.reactions.resolve(plan.remove)?.users.remove(botId);
-        }
-      }
+      if (plan.remove) await removeBotEmoji(message, plan.remove);
       if (plan.add) await message.react(plan.add);
       phase = plan.phase;
     } catch (err) {

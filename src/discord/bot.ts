@@ -90,9 +90,15 @@ type Active = {
 async function abandonQueuedTurns(queue: QueuedTurn[]): Promise<number> {
   const items = queue.splice(0, queue.length);
   // Clean up UI reactions in parallel for speed.
-  const results = await Promise.all(
-    items.map((item) => discardQueueWaiting(item.reactionMessage)),
-  );
+  const results = (
+    await Promise.allSettled(
+      items.map((item) =>
+        item.reactionMessage
+          ? discardQueueWaiting(item.reactionMessage)
+          : Promise.resolve(true),
+      ),
+    )
+  ).map((r) => r.status === "fulfilled" && r.value);
   const failed = results.filter((ok) => !ok).length;
   if (failed) {
     console.error(`abandonQueuedTurns: ${failed}/${items.length} UI discard incomplete`);
@@ -911,7 +917,7 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
           attachmentsMessage: args.attachmentsMessage,
           reactionMessage: args.reactionMessage,
         });
-        await markQueueWaiting(args.reactionMessage);
+        if (args.reactionMessage) await markQueueWaiting(args.reactionMessage);
         return;
       }
       await args.reply("まだ前のターンを処理中です。");
@@ -931,6 +937,7 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
       const statusRef: { msg: Message | null } = { msg: null };
       let lastStatus = "";
       const onProgress = async (line: string) => {
+        if ((turnEpoch.get(turn.key) ?? 0) !== epoch) return;
         if (line === lastStatus) return;
         lastStatus = line;
         try {
@@ -1087,7 +1094,7 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
                 const out = path.join(
                   cfg.dataDir,
                   "voice-tmp",
-                  `reply-${Date.now()}.mp3`,
+                  `reply-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp3`,
                 );
                 await synthesizeSpeech(vcfg, answer.slice(0, 1500), out);
                 await turn.channel.send({
@@ -1107,7 +1114,9 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
         if (statusRef.msg) await statusRef.msg.delete().catch(() => {});
         await turn
           .reply(`エラー: ${err instanceof Error ? err.message : String(err)}`)
-          .catch(() => {});
+          .catch((replyErr) => {
+            console.error("turn error reply failed:", replyErr);
+          });
         await reactions.failed();
         const cur = active.get(turn.key);
         if (cur && (turnEpoch.get(turn.key) ?? 0) === epoch) cur.run = null;
@@ -1119,7 +1128,9 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
       let current = args;
       let fromQueue = false;
       for (;;) {
-        if (fromQueue) await clearQueueWaiting(current.reactionMessage);
+        if (fromQueue && current.reactionMessage) {
+          await clearQueueWaiting(current.reactionMessage);
+        }
         const outcome = await executeOne(current);
         if (outcome === "cleared") {
           const a = active.get(args.key);

@@ -58,7 +58,7 @@ async function removeBotEmoji(
 export async function markQueueWaiting(
   message: Message | undefined,
 ): Promise<boolean> {
-  if (!message) return true;
+  if (!message) return false;
   try {
     await message.react(QUEUE_REACT);
     return true;
@@ -71,7 +71,7 @@ export async function markQueueWaiting(
 export async function clearQueueWaiting(
   message: Message | undefined,
 ): Promise<boolean> {
-  if (!message) return true;
+  if (!message) return false;
   try {
     return await removeBotEmoji(message, QUEUE_REACT);
   } catch (err) {
@@ -83,7 +83,7 @@ export async function clearQueueWaiting(
 export async function discardQueueWaiting(
   message: Message | undefined,
 ): Promise<boolean> {
-  if (!message) return true;
+  if (!message) return false;
   // Add ❌ first so discard is visible even if ♾️ removal fails.
   // If add fails, leave ♾️ so the message is not left with no mark.
   // Do not remove-first: that can leave the message with no mark at all.
@@ -214,6 +214,11 @@ export function selfCheckTurnReactions(): void {
     planQueueReaction(false, "discard"),
     { waiting: false, add: "❌" },
     "queue discard without waiting",
+  );
+  eq(
+    planQueueReaction(false, "start"),
+    { waiting: false },
+    "queue start idempotent",
   );
 }
 

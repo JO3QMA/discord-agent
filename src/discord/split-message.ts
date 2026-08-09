@@ -1,20 +1,56 @@
 /** Discord message content hard limit (final string, including wrappers). */
 export const DISCORD_CONTENT_MAX = 2000;
 
+/** Cap split messages to limit rate-limit / channel spam from huge LLM dumps. */
+export const DISCORD_MAX_CHUNKS = 20;
+
 type Block =
   | { kind: "text"; text: string }
-  | { kind: "fence"; lang: string; body: string }
+  | { kind: "fence"; ticks: number; lang: string; body: string }
   | { kind: "table"; header: string[]; rows: string[] };
 
-function isTableSeparator(line: string): boolean {
-  const t = line.trim();
-  return /^\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?$/.test(t);
+const graphemeSeg =
+  typeof Intl !== "undefined" && "Segmenter" in Intl
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+
+function graphemes(s: string): string[] {
+  if (graphemeSeg) {
+    return Array.from(graphemeSeg.segment(s), (x) => x.segment);
+  }
+  return Array.from(s);
+}
+
+/** Take a prefix with JS/Discord length <= max, without splitting graphemes when possible. */
+function takeLen(s: string, max: number): string {
+  if (s.length <= max) return s;
+  let out = "";
+  for (const g of graphemes(s)) {
+    if (out.length + g.length > max) break;
+    out += g;
+  }
+  return out.length > 0 ? out : s.slice(0, max);
 }
 
 function hardCut(s: string, max: number): string[] {
   if (s.length === 0) return [];
+  if (max < 1) return [s];
   const out: string[] = [];
-  for (let i = 0; i < s.length; i += max) out.push(s.slice(i, i + max));
+  let buf = "";
+  for (const g of graphemes(s)) {
+    if (buf.length + g.length > max) {
+      if (buf) out.push(buf);
+      if (g.length > max) {
+        for (let i = 0; i < g.length; i += max) out.push(g.slice(i, i + max));
+        buf = "";
+      } else {
+        buf = g;
+      }
+    } else {
+      buf += g;
+    }
+  }
+  if (buf) out.push(buf);
   return out;
 }
 
@@ -46,6 +82,16 @@ function packJoined(parts: string[], max: number, join: string): string[] {
   return out;
 }
 
+function isTableSeparator(line: string): boolean {
+  const t = line.trim();
+  return /^\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?$/.test(t);
+}
+
+function isFenceClose(line: string, openTicks: number): boolean {
+  const m = /^(```+)(?:\s*)$/.exec(line.trimStart());
+  return !!m && m[1]!.length >= openTicks;
+}
+
 function parseBlocks(content: string): Block[] {
   const lines = content.split("\n");
   const blocks: Block[] = [];
@@ -63,36 +109,35 @@ function parseBlocks(content: string): Block[] {
 
   while (i < lines.length) {
     const line = lines[i]!;
-    const fence = /^```(\S*)/.exec(line);
+    const fence = /^(```+)\s*(\S*)/.exec(line);
     if (fence) {
       flushText();
-      const lang = fence[1] ?? "";
+      const ticks = fence[1]!.length;
+      const lang = fence[2] ?? "";
       i += 1;
       const body: string[] = [];
-      while (i < lines.length && !lines[i]!.startsWith("```")) {
+      while (i < lines.length && !isFenceClose(lines[i]!, ticks)) {
         body.push(lines[i]!);
         i += 1;
       }
       if (i < lines.length) i += 1;
-      blocks.push({ kind: "fence", lang, body: body.join("\n") });
+      blocks.push({ kind: "fence", ticks, lang, body: body.join("\n") });
       continue;
     }
 
-    if (line.trimStart().startsWith("|")) {
+    // GFM table: header row + separator required (avoid treating "| foo" lists as tables).
+    if (
+      line.trimStart().startsWith("|") &&
+      i + 1 < lines.length &&
+      isTableSeparator(lines[i + 1]!)
+    ) {
       flushText();
-      const tableLines: string[] = [];
+      const header = [lines[i]!, lines[i + 1]!];
+      i += 2;
+      const rows: string[] = [];
       while (i < lines.length && lines[i]!.trimStart().startsWith("|")) {
-        tableLines.push(lines[i]!);
+        rows.push(lines[i]!);
         i += 1;
-      }
-      let header: string[] = [];
-      let rows: string[] = [];
-      if (tableLines.length >= 2 && isTableSeparator(tableLines[1]!)) {
-        header = [tableLines[0]!, tableLines[1]!];
-        rows = tableLines.slice(2);
-      } else {
-        header = tableLines.length > 0 ? [tableLines[0]!] : [];
-        rows = tableLines.slice(1);
       }
       blocks.push({ kind: "table", header, rows });
       continue;
@@ -110,17 +155,41 @@ function splitText(text: string, max: number): string[] {
   return packJoined(text.split("\n"), max, "\n");
 }
 
-function splitFence(lang: string, body: string, max: number): string[] {
-  const open = "```" + lang + "\n";
-  const close = "\n```";
+function splitFence(
+  ticks: number,
+  lang: string,
+  body: string,
+  max: number,
+): string[] {
+  const mark = "`".repeat(ticks);
+  const open = mark + lang + "\n";
+  const close = "\n" + mark;
   const wrapped = open + body + close;
   if (wrapped.length <= max) return [wrapped];
 
   const innerMax = max - open.length - close.length;
   if (innerMax < 1) return hardCut(wrapped, max);
 
-  const lineChunks = packJoined(body.length ? body.split("\n") : [""], innerMax, "\n");
+  const lineChunks = packJoined(
+    body.length ? body.split("\n") : [""],
+    innerMax,
+    "\n",
+  );
   return lineChunks.map((chunk) => open + chunk + close);
+}
+
+/** Prefer cutting an oversize table row at the last `|` within budget. */
+function truncateRowAtCell(row: string, budget: number): {
+  kept: string;
+  rest: string;
+} {
+  if (row.length <= budget) return { kept: row, rest: "" };
+  const slice = takeLen(row, budget);
+  const cut = slice.lastIndexOf("|");
+  if (cut > 0) {
+    return { kept: slice.slice(0, cut + 1), rest: row.slice(cut + 1) };
+  }
+  return { kept: slice, rest: row.slice(slice.length) };
 }
 
 function splitTable(header: string[], rows: string[], max: number): string[] {
@@ -146,13 +215,31 @@ function splitTable(header: string[], rows: string[], max: number): string[] {
   for (const row of rows) {
     const add = 1 + row.length;
     if (buf.length > 0 && len + add > max) flush();
-    if (headerText.length + 1 + row.length > max) {
-      if (buf.length) flush();
-      out.push(...hardCut([headerText, row].join("\n"), max));
+    if (headerText.length + 1 + row.length <= max) {
+      buf.push(row);
+      len += add;
       continue;
     }
-    buf.push(row);
-    len += add;
+    if (buf.length) flush();
+    let remaining = row;
+    while (remaining.length > 0) {
+      const budget = max - headerText.length - 1;
+      if (budget < 1) {
+        out.push(...hardCut(remaining, max));
+        break;
+      }
+      if (remaining.length <= budget) {
+        out.push(headerText + "\n" + remaining);
+        break;
+      }
+      const { kept, rest } = truncateRowAtCell(remaining, budget);
+      if (!kept) {
+        out.push(...hardCut(remaining, max));
+        break;
+      }
+      out.push(headerText + "\n" + kept);
+      remaining = rest;
+    }
   }
   if (buf.length > 0 || out.length === 0) flush();
   return out;
@@ -163,26 +250,45 @@ function piecesForBlock(block: Block, max: number): string[] {
     case "text":
       return splitText(block.text, max);
     case "fence":
-      return splitFence(block.lang, block.body, max);
+      return splitFence(block.ticks, block.lang, block.body, max);
     case "table":
       return splitTable(block.header, block.rows, max);
   }
 }
 
+function applyChunkCap(
+  chunks: string[],
+  max: number,
+  maxChunks: number,
+): string[] {
+  if (chunks.length <= maxChunks) return chunks;
+  const kept = chunks.slice(0, maxChunks);
+  const notice = "\n…(truncated)";
+  const last = kept[maxChunks - 1]!;
+  const room = max - notice.length;
+  kept[maxChunks - 1] =
+    room < 1 ? takeLen(notice.trimStart(), max) : takeLen(last, room) + notice;
+  return kept;
+}
+
 /**
  * Split long Discord content into messages under `max` (final string length).
  * Prefer paragraph, then line; protect fences/tables; greedy-pack units.
+ * Caps at `maxChunks` (truncates remainder) to avoid spam / rate limits.
  */
 export function splitMessage(
   content: string,
   max: number = DISCORD_CONTENT_MAX,
+  maxChunks: number = DISCORD_MAX_CHUNKS,
 ): string[] {
   if (content.length === 0) return [];
+  if (max < 1) return applyChunkCap(hardCut(content, 1), 1, maxChunks);
   if (content.length <= max) return [content];
-  if (max < 1) return hardCut(content, 1);
 
   const blocks = parseBlocks(content);
-  if (blocks.length === 0) return hardCut(content, max);
+  if (blocks.length === 0) {
+    return applyChunkCap(hardCut(content, max), max, maxChunks);
+  }
 
   const pieces: string[] = [];
   for (const block of blocks) pieces.push(...piecesForBlock(block, max));
@@ -204,5 +310,5 @@ export function splitMessage(
     }
   }
   if (cur) out.push(cur);
-  return out;
+  return applyChunkCap(out, max, maxChunks);
 }

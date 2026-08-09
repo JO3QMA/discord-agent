@@ -11,33 +11,6 @@ export const TURN_REACT = {
 /** CONTEXT.md「キュー待ちリアクション」 — Discord `:infinity:` */
 export const QUEUE_REACT = "♾️";
 
-export type QueueReactPlan = {
-  waiting: boolean;
-  remove?: string;
-  add?: string;
-};
-
-/** Discord を触らない状態遷移。テスト用にも使う。 */
-export function planQueueReaction(
-  waiting: boolean,
-  event: "wait" | "start" | "discard",
-): QueueReactPlan {
-  if (event === "wait") {
-    if (waiting) return { waiting };
-    return { waiting: true, add: QUEUE_REACT };
-  }
-  if (event === "start") {
-    if (!waiting) return { waiting: false };
-    return { waiting: false, remove: QUEUE_REACT };
-  }
-  if (event === "discard") {
-    if (!waiting) return { waiting: false, add: TURN_REACT.fail };
-    return { waiting: false, remove: QUEUE_REACT, add: TURN_REACT.fail };
-  }
-  // Exhaustiveness guard for future event additions.
-  throw new Error(`Unexpected queue event: ${String(event)}`);
-}
-
 async function removeBotEmoji(
   message: Message,
   emoji: string,
@@ -174,11 +147,7 @@ export function turnReactions(message: Message | undefined): TurnReactionHandle 
 }
 
 export function selfCheckTurnReactions(): void {
-  const eq = (
-    a: TurnReactPlan | QueueReactPlan,
-    b: TurnReactPlan | QueueReactPlan,
-    msg: string,
-  ) => {
+  const eq = (a: TurnReactPlan, b: TurnReactPlan, msg: string) => {
     if (JSON.stringify(a) !== JSON.stringify(b)) {
       throw new Error(`${msg}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`);
     }
@@ -197,29 +166,6 @@ export function selfCheckTurnReactions(): void {
   eq(planTurnReaction("terminal", "ok"), { phase: "terminal" }, "idempotent ok");
   eq(planTurnReaction("none", "fail"), { phase: "terminal", add: "❌" }, "fail without start");
   eq(planTurnReaction("started", "start"), { phase: "started" }, "no double start");
-
-  eq(planQueueReaction(false, "wait"), { waiting: true, add: "♾️" }, "queue wait");
-  eq(planQueueReaction(true, "wait"), { waiting: true }, "queue wait idempotent");
-  eq(
-    planQueueReaction(true, "start"),
-    { waiting: false, remove: "♾️" },
-    "queue start clears",
-  );
-  eq(
-    planQueueReaction(true, "discard"),
-    { waiting: false, remove: "♾️", add: "❌" },
-    "queue discard",
-  );
-  eq(
-    planQueueReaction(false, "discard"),
-    { waiting: false, add: "❌" },
-    "queue discard without waiting",
-  );
-  eq(
-    planQueueReaction(false, "start"),
-    { waiting: false },
-    "queue start idempotent",
-  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

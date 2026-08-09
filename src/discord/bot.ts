@@ -408,7 +408,6 @@ async function handleSlash(
   cfg: AppConfig,
   client: Client,
   interaction: ChatInputCommandInteraction,
-  busy: Set<string>,
   active: Map<string, Active>,
   turnEpoch: Map<string, number>,
   runTurn: (args: {
@@ -449,10 +448,8 @@ async function handleSlash(
       discarded = await abandonQueuedTurns(a.queue);
       if (a.run?.supports("cancel")) await a.run.cancel().catch(() => {});
     }
-    // busy before active: avoid busy∧¬active → "まだ前のターンを処理中です。"
     // Epoch bump: cancelled turn's finally must not clear a replacement turn.
     turnEpoch.set(key, (turnEpoch.get(key) ?? 0) + 1);
-    busy.delete(key);
     active.delete(key);
     const prev = await clearSessionKey(cfg.dataDir, key);
     const queueNote =
@@ -874,7 +871,6 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
     partials: [Partials.Channel],
   });
 
-  const busy = new Set<string>();
   const active = new Map<string, Active>();
   /** Bumped by /new so a cancelled turn's finally won't clear a replacement turn. */
   const turnEpoch = new Map<string, number>();
@@ -890,25 +886,20 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
     /** チャット入口のみ。ターン状態リアクションの付け先 */
     reactionMessage?: Message;
   }) => {
-    if (busy.has(args.key)) {
-      const a = active.get(args.key);
-      if (a) {
-        a.queue.push({
-          userId: args.userId,
-          channel: args.channel,
-          text: args.text,
-          reply: args.reply,
-          attachmentsMessage: args.attachmentsMessage,
-          reactionMessage: args.reactionMessage,
-        });
-        if (args.reactionMessage) await markQueueWaiting(args.reactionMessage);
-        return;
-      }
-      await args.reply("まだ前のターンを処理中です。");
+    const existing = active.get(args.key);
+    if (existing) {
+      existing.queue.push({
+        userId: args.userId,
+        channel: args.channel,
+        text: args.text,
+        reply: args.reply,
+        attachmentsMessage: args.attachmentsMessage,
+        reactionMessage: args.reactionMessage,
+      });
+      if (args.reactionMessage) await markQueueWaiting(args.reactionMessage);
       return;
     }
 
-    busy.add(args.key);
     active.set(args.key, { run: null, queue: [] });
     const epoch = turnEpoch.get(args.key) ?? 0;
 
@@ -1133,7 +1124,6 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
     } finally {
       if ((turnEpoch.get(args.key) ?? 0) === epoch) {
         active.delete(args.key);
-        busy.delete(args.key);
         turnEpoch.delete(args.key);
       }
     }
@@ -1180,7 +1170,6 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
         cfg,
         client,
         interaction,
-        busy,
         active,
         turnEpoch,
         runTurn,

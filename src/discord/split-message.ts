@@ -101,10 +101,8 @@ function packJoined(parts: string[], max: number, join: string): string[] {
 
 function isTableSeparator(line: string): boolean {
   const t = line.trim();
-  // Include single-column separators like |---| (old regex required 2+ cells).
-  return (
-    /^\|?(\s*:?-+:?\s*\|)+\s*$/.test(t) || /^\|?\s*:?-+:?\s*\|?\s*$/.test(t)
-  );
+  // GFM separator: one+ dash cells; leading/trailing pipes optional (incl. |---| and | --- | ---).
+  return /^\|?(\s*:?-+:?\s*\|)*\s*:?-+:?\s*\|?$/.test(t);
 }
 
 function isFenceClose(line: string, openTicks: number): boolean {
@@ -198,15 +196,16 @@ function splitFence(
   return lineChunks.map((chunk) => open + chunk + close);
 }
 
-/** Prefer cutting an oversize table row at the last `|` within budget. */
+/** Prefer cutting an oversize table row at the last unescaped `|` within budget. */
 function truncateRowAtCell(row: string, budget: number): {
   kept: string;
   rest: string;
 } {
   if (row.length <= budget) return { kept: row, rest: "" };
   const slice = takeLen(row, budget);
-  const cut = slice.lastIndexOf("|");
-  if (cut >= 0) {
+  let cut = slice.length;
+  while ((cut = slice.lastIndexOf("|", cut - 1)) >= 0) {
+    if (cut > 0 && slice[cut - 1] === "\\") continue;
     return { kept: slice.slice(0, cut + 1), rest: row.slice(cut + 1) };
   }
   return { kept: slice, rest: row.slice(slice.length) };

@@ -123,6 +123,23 @@ function main() {
     "single-column table separator recognized",
   );
 
+  const noTrailPipe = "| a | b\n| --- | ---\n| 1 | 2 |";
+  assert(
+    splitMessage(noTrailPipe)[0]!.includes("| --- | ---"),
+    "separator without trailing pipe recognized",
+  );
+
+  const escaped = "| h |\n| --- |\n| a\\|b | " + "x".repeat(40) + " |";
+  const escChunks = splitMessage(escaped, 60);
+  assert(
+    escChunks.every((c, i) => i === escChunks.length - 1 || !c.trimEnd().endsWith("\\|")),
+    "does not cut on escaped pipes",
+  );
+  assert(
+    escChunks.every((c) => c.includes("| h |")),
+    "escaped-pipe row keeps header",
+  );
+
   console.log("check-split-message: ok");
 }
 

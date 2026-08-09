@@ -99,14 +99,28 @@ function main() {
 
   assert(DISCORD_MAX_CHUNKS >= 1, "default chunk cap configured");
 
-  // Oversize single table row: cut at cell boundary, not mid-cell via hardCut of header+row.
-  const wide =
-    "| h1 | h2 |\n| --- | --- |\n| " + "cell".repeat(30) + " | end |";
-  const wChunks = splitMessage(wide, 50);
-  assert(wChunks.every((c) => c.length <= 50), "wide row chunks under max");
+  // Many modest cells: split on `|`, never mid-cell when a pipe fits in budget.
+  const cells = Array.from({ length: 20 }, (_, i) => `c${i}`).join(" | ");
+  const wide = `| h1 | h2 |\n| --- | --- |\n| ${cells} |`;
+  const wChunks = splitMessage(wide, 80);
+  assert(wChunks.every((c) => c.length <= 80), "wide row chunks under max");
   assert(
     wChunks.every((c) => c.includes("| h1 | h2 |")),
     "wide row keeps header",
+  );
+  assert(
+    wChunks.some((c) => c.includes("c0")) && wChunks.some((c) => c.includes("c19")),
+    "wide row preserves cell content across chunks",
+  );
+  assert(
+    wChunks.every((c, i) => i === wChunks.length - 1 || c.trimEnd().endsWith("|")),
+    "wide row cuts at cell boundaries",
+  );
+
+  const oneCol = "| h |\n| --- |\n| v |";
+  assert(
+    splitMessage(oneCol)[0]!.includes("| --- |"),
+    "single-column table separator recognized",
   );
 
   console.log("check-split-message: ok");

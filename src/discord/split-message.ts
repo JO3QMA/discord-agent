@@ -21,6 +21,17 @@ function graphemes(s: string): string[] {
   return Array.from(s);
 }
 
+/** Slice without splitting a trailing UTF-16 surrogate pair. */
+function sliceCodeUnitsSafe(s: string, max: number): string {
+  if (max <= 0) return "";
+  if (s.length <= max) return s;
+  for (let i = max; i > 0; i--) {
+    const code = s.charCodeAt(i - 1);
+    if (code < 0xdc00 || code > 0xdfff) return s.slice(0, i);
+  }
+  return s.slice(0, max);
+}
+
 /** Take a prefix with JS/Discord length <= max, without splitting graphemes when possible. */
 function takeLen(s: string, max: number): string {
   if (s.length <= max) return s;
@@ -29,7 +40,7 @@ function takeLen(s: string, max: number): string {
     if (out.length + g.length > max) break;
     out += g;
   }
-  return out.length > 0 ? out : s.slice(0, max);
+  return out.length > 0 ? out : sliceCodeUnitsSafe(s, max);
 }
 
 function hardCut(s: string, max: number): string[] {
@@ -41,7 +52,13 @@ function hardCut(s: string, max: number): string[] {
     if (buf.length + g.length > max) {
       if (buf) out.push(buf);
       if (g.length > max) {
-        for (let i = 0; i < g.length; i += max) out.push(g.slice(i, i + max));
+        let rest = g;
+        while (rest.length > 0) {
+          const part = sliceCodeUnitsSafe(rest, max);
+          if (!part) break;
+          out.push(part);
+          rest = rest.slice(part.length);
+        }
         buf = "";
       } else {
         buf = g;
@@ -84,7 +101,10 @@ function packJoined(parts: string[], max: number, join: string): string[] {
 
 function isTableSeparator(line: string): boolean {
   const t = line.trim();
-  return /^\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?$/.test(t);
+  // Include single-column separators like |---| (old regex required 2+ cells).
+  return (
+    /^\|?(\s*:?-+:?\s*\|)+\s*$/.test(t) || /^\|?\s*:?-+:?\s*\|?\s*$/.test(t)
+  );
 }
 
 function isFenceClose(line: string, openTicks: number): boolean {
@@ -186,7 +206,7 @@ function truncateRowAtCell(row: string, budget: number): {
   if (row.length <= budget) return { kept: row, rest: "" };
   const slice = takeLen(row, budget);
   const cut = slice.lastIndexOf("|");
-  if (cut > 0) {
+  if (cut >= 0) {
     return { kept: slice.slice(0, cut + 1), rest: row.slice(cut + 1) };
   }
   return { kept: slice, rest: row.slice(slice.length) };
@@ -198,7 +218,7 @@ function splitTable(header: string[], rows: string[], max: number): string[] {
   if (full.length <= max) return [full];
 
   const headerText = header.join("\n");
-  if (header.length === 0 || headerText.length >= max) {
+  if (headerText.length >= max) {
     return packJoined(all, max, "\n");
   }
 
@@ -261,6 +281,7 @@ function applyChunkCap(
   max: number,
   maxChunks: number,
 ): string[] {
+  if (maxChunks < 1) maxChunks = 1;
   if (chunks.length <= maxChunks) return chunks;
   const kept = chunks.slice(0, maxChunks);
   const notice = "\n…(truncated)";

@@ -51,7 +51,6 @@ function usageHeader(target: MemoryTarget, used: number): string {
 export async function ensureMemoryLayout(dataDir: string): Promise<void> {
   const p = dataPaths(dataDir);
   await fs.mkdir(p.memoriesDir, { recursive: true });
-  await fs.mkdir(p.skillsDir, { recursive: true });
   await fs.mkdir(path.join(p.memoriesDir, "operators"), { recursive: true });
   try {
     await fs.access(p.memoryFile);

@@ -47,6 +47,30 @@ function json(result: unknown) {
   };
 }
 
+async function withSkillApproval(
+  action: string,
+  summary: string,
+  payload: Record<string, unknown>,
+  run: () => Promise<unknown>,
+) {
+  try {
+    if ((await loadSettings(dataDir)).skillsWriteApproval) {
+      const pending = await stageWrite(
+        dataDir,
+        "skill",
+        action,
+        summary,
+        payload,
+        true,
+      );
+      return json({ success: true, staged: true, id: pending.id });
+    }
+    return json(await run());
+  } catch (err) {
+    return json({ success: false, error: String(err) });
+  }
+}
+
 async function main() {
   await ensureMemoryLayout(dataDir);
   await ensureSkillsLayout(dataDir);
@@ -135,24 +159,10 @@ async function main() {
       description: z.string(),
       body: z.string(),
     },
-    async ({ name, description, body }) => {
-      try {
-        if ((await loadSettings(dataDir)).skillsWriteApproval) {
-          const pending = await stageWrite(
-            dataDir,
-            "skill",
-            "create",
-            `create ${name}`,
-            { name, description, body },
-            true,
-          );
-          return json({ success: true, staged: true, id: pending.id });
-        }
-        return json(await createSkill(dataDir, name, description, body));
-      } catch (err) {
-        return json({ success: false, error: String(err) });
-      }
-    },
+    async ({ name, description, body }) =>
+      withSkillApproval("create", `create ${name}`, { name, description, body }, () =>
+        createSkill(dataDir, name, description, body),
+      ),
   );
 
   server.tool(
@@ -163,48 +173,23 @@ async function main() {
       old_text: z.string(),
       new_text: z.string(),
     },
-    async ({ name, old_text, new_text }) => {
-      try {
-        if ((await loadSettings(dataDir)).skillsWriteApproval) {
-          const pending = await stageWrite(
-            dataDir,
-            "skill",
-            "patch",
-            `patch ${name}`,
-            { name, old_text, new_text },
-            true,
-          );
-          return json({ success: true, staged: true, id: pending.id });
-        }
-        return json(await patchSkill(dataDir, name, old_text, new_text));
-      } catch (err) {
-        return json({ success: false, error: String(err) });
-      }
-    },
+    async ({ name, old_text, new_text }) =>
+      withSkillApproval(
+        "patch",
+        `patch ${name}`,
+        { name, old_text, new_text },
+        () => patchSkill(dataDir, name, old_text, new_text),
+      ),
   );
 
   server.tool(
     "skill_delete",
     "Delete a skill directory.",
     { name: z.string() },
-    async ({ name }) => {
-      try {
-        if ((await loadSettings(dataDir)).skillsWriteApproval) {
-          const pending = await stageWrite(
-            dataDir,
-            "skill",
-            "delete",
-            `delete ${name}`,
-            { name },
-            true,
-          );
-          return json({ success: true, staged: true, id: pending.id });
-        }
-        return json(await deleteSkill(dataDir, name));
-      } catch (err) {
-        return json({ success: false, error: String(err) });
-      }
-    },
+    async ({ name }) =>
+      withSkillApproval("delete", `delete ${name}`, { name }, () =>
+        deleteSkill(dataDir, name),
+      ),
   );
 
   server.tool(

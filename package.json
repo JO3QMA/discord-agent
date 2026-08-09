@@ -16,6 +16,7 @@
     "check:mcp": "tsx src/cli/check-mcp.ts",
     "check:search": "tsx src/cli/check-search.ts",
     "check:session": "tsx src/cli/check-session.ts",
+    "check:split-message": "tsx src/cli/check-split-message.ts",
     "smoke:sdk": "tsx src/cli/smoke-sdk.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

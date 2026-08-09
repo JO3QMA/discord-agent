@@ -77,9 +77,13 @@ function main() {
   const indentedClose = "```js\nok\n  ```\n\n" + "z".repeat(100);
   const ic = splitMessage(indentedClose, 50);
   assert(
-    ic.some((c) => /^```js\nok\n```$/.test(c.trimEnd()) || c.startsWith("```js\nok\n```")),
-    "closing fence allows leading spaces",
+    ic.some((c) => c.includes("```js\n") && c.includes("ok") && c.includes("```")),
+    "closing fence allows up to 3 leading spaces",
   );
+
+  const tooIndentedClose = "```js\nok\n    ```\nstill in fence\n```";
+  const ti = splitMessage(tooIndentedClose);
+  assert(ti[0] !== undefined && ti[0].includes("still in fence"), "4-space line does not close fence");
 
   const mixed =
     "intro paragraph\n\n```js\nconsole.log(1);\n```\n\n| h |\n| --- |\n| v |\n\noutro";

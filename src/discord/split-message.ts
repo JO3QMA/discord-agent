@@ -111,8 +111,9 @@ function isTableLine(line: string): boolean {
 }
 
 function isFenceClose(line: string, openTicks: number): boolean {
-  const m = /^(```+)(?:\s*)$/.exec(line.trimStart());
-  return !!m && m[1]!.length >= openTicks;
+  // CommonMark: closing fence may be indented up to 3 spaces (same as open).
+  const m = /^( {0,3})(```+)(?:\s*)$/.exec(line);
+  return !!m && m[2]!.length >= openTicks;
 }
 
 function parseBlocks(content: string): Block[] {
@@ -131,16 +132,20 @@ function parseBlocks(content: string): Block[] {
   };
 
   while (i < lines.length) {
-    const line = lines[i]!;
-    const fence = /^(```+)\s*(\S*)/.exec(line);
+    const line = lines[i];
+    if (line === undefined) break;
+    // CommonMark: opening fence may be indented up to 3 spaces.
+    const fence = /^( {0,3})(```+)\s*(\S*)/.exec(line);
     if (fence) {
       flushText();
-      const ticks = fence[1]!.length;
-      const lang = fence[2] ?? "";
+      const ticks = fence[2]!.length;
+      const lang = fence[3] ?? "";
       i += 1;
       const body: string[] = [];
-      while (i < lines.length && !isFenceClose(lines[i]!, ticks)) {
-        body.push(lines[i]!);
+      while (i < lines.length) {
+        const closeLine = lines[i];
+        if (closeLine === undefined || isFenceClose(closeLine, ticks)) break;
+        body.push(closeLine);
         i += 1;
       }
       if (i < lines.length) i += 1;
@@ -156,11 +161,13 @@ function parseBlocks(content: string): Block[] {
       isTableSeparator(lines[i + 1]!)
     ) {
       flushText();
-      const header = [lines[i]!, lines[i + 1]!];
+      const header = [line, lines[i + 1]!];
       i += 2;
       const rows: string[] = [];
-      while (i < lines.length && isTableLine(lines[i]!)) {
-        rows.push(lines[i]!);
+      while (i < lines.length) {
+        const row = lines[i];
+        if (row === undefined || !isTableLine(row)) break;
+        rows.push(row);
         i += 1;
       }
       blocks.push({ kind: "table", header, rows });

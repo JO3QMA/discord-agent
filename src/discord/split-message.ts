@@ -16,15 +16,20 @@ function graphemes(s: string): string[] {
   return Array.from(graphemeSeg.segment(s), (x) => x.segment);
 }
 
-/** Slice without splitting a trailing UTF-16 surrogate pair. */
+/** Slice without splitting a UTF-16 surrogate pair. */
 function sliceCodeUnitsSafe(s: string, max: number): string {
   if (max <= 0) return "";
   if (s.length <= max) return s;
-  for (let i = max; i > 0; i--) {
-    const code = s.charCodeAt(i - 1);
-    if (code < 0xdc00 || code > 0xdfff) return s.slice(0, i);
+  let end = max;
+  // If max lands on a low surrogate, drop the dangling high before it.
+  const atMax = s.charCodeAt(end);
+  if (atMax >= 0xdc00 && atMax <= 0xdfff) end -= 1;
+  // If end still sits on a high surrogate, drop it.
+  if (end > 0) {
+    const last = s.charCodeAt(end - 1);
+    if (last >= 0xd800 && last <= 0xdbff) end -= 1;
   }
-  return s.slice(0, max);
+  return end > 0 ? s.slice(0, end) : "";
 }
 
 /** Take a prefix with JS/Discord length <= max, without splitting graphemes when possible. */
@@ -294,11 +299,12 @@ function applyChunkCap(
   if (chunks.length <= maxChunks) return chunks;
   const kept = chunks.slice(0, maxChunks);
   const notice = "\n…(truncated)";
-  const last = kept[maxChunks - 1]!;
+  const last = kept[maxChunks - 1];
+  if (!last) return kept;
   const room = max - notice.length;
-  kept[maxChunks - 1] =
+  const truncated =
     room < 1 ? takeLen(notice.trimStart(), max) : takeLen(last, room) + notice;
-  return kept;
+  return [...kept.slice(0, -1), truncated];
 }
 
 /**

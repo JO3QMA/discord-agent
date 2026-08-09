@@ -71,8 +71,9 @@ function main() {
     "````md\n" + "```ts\nconst z = 1;\n```\n" + "outer still open\n" + "````";
   const nChunks = splitMessage(nested);
   assert(nChunks.length === 1, "nested fence stays one block");
-  assert(nChunks[0]!.includes("```ts\n"), "inner fence preserved");
-  assert(nChunks[0]!.includes("outer still open"), "body after inner kept");
+  assert(nChunks[0] !== undefined, "nested fence produces a chunk");
+  assert(nChunks[0].includes("```ts\n"), "inner fence preserved");
+  assert(nChunks[0].includes("outer still open"), "body after inner kept");
 
   const indentedClose = "```js\nok\n  ```\n\n" + "z".repeat(100);
   const ic = splitMessage(indentedClose, 50);
@@ -98,7 +99,7 @@ function main() {
   const huge = ("para\n\n").repeat(500) + "z".repeat(5000);
   const capped = splitMessage(huge, 100, 3);
   assert(capped.length === 3, "maxChunks cap");
-  assert(capped[2]!.includes("…(truncated)"), "truncation marker");
+  assert(capped[2] !== undefined && capped[2].includes("…(truncated)"), "truncation marker");
   assert(capped.every((c) => c.length <= 100), "capped chunks under max");
 
   assert(DISCORD_MAX_CHUNKS >= 1, "default chunk cap configured");

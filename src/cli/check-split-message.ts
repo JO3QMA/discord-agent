@@ -161,7 +161,7 @@ function main() {
   assert(ind[0] !== undefined && ind[0] === indented, "3-space indented pipes stay plain text");
   const indChunks = splitMessage(indented + "\n\n" + "z".repeat(100), 40);
   assert(
-    indChunks.filter((c) => c.includes("| h |") && c.includes("| --- |")).length <= 1,
+    indChunks.filter((c) => c.includes("| h |") && c.includes("| --- |")).length === 1,
     "indented pipes do not get table header-repeat split",
   );
 

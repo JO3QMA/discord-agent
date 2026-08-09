@@ -9,16 +9,11 @@ type Block =
   | { kind: "fence"; ticks: number; lang: string; body: string }
   | { kind: "table"; header: string[]; rows: string[] };
 
-const graphemeSeg =
-  typeof Intl !== "undefined" && "Segmenter" in Intl
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
+const graphemeSeg = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function graphemes(s: string): string[] {
-  if (graphemeSeg) {
-    return Array.from(graphemeSeg.segment(s), (x) => x.segment);
-  }
-  return Array.from(s);
+  // engines.node >=22.13 guarantees Intl.Segmenter (no code-point fallback).
+  return Array.from(graphemeSeg.segment(s), (x) => x.segment);
 }
 
 /** Slice without splitting a trailing UTF-16 surrogate pair. */

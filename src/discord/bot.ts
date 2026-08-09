@@ -45,7 +45,7 @@ import {
   updateSettings,
   type VoiceMode,
 } from "../gateway/settings.js";
-import { listPending } from "../approval/pending.js";
+import { listPending, type PendingKind } from "../approval/pending.js";
 import { applyPending, approveAll, rejectPending } from "../approval/apply.js";
 import {
   createCronJob,
@@ -351,8 +351,6 @@ async function resolveModel(
   const s = await loadSettings(dataDir);
   return s.modelByOperator[operatorKey(userId)] || cfg.modelId;
 }
-
-type PendingKind = "memory" | "skill";
 
 async function handleWriteApprovalActions(
   cfg: AppConfig,

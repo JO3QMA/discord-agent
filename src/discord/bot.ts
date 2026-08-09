@@ -33,6 +33,7 @@ import {
   markQueueWaiting,
   turnReactions,
 } from "./turn-reactions.js";
+import { splitMessage } from "./split-message.js";
 import {
   indexMessage,
   searchMessages,
@@ -266,11 +267,7 @@ async function sendChunked(
   send: (content: string) => Promise<unknown>,
   content: string,
 ): Promise<void> {
-  const max = 1900;
-  let rest = content;
-  while (rest.length > 0) {
-    const chunk = rest.slice(0, max);
-    rest = rest.slice(max);
+  for (const chunk of splitMessage(content)) {
     await send(chunk);
   }
 }
@@ -283,35 +280,19 @@ async function replyInteraction(
   interaction: ChatInputCommandInteraction,
   content: string,
 ): Promise<void> {
-  const max = 1900;
+  const chunks = splitMessage(content);
+  if (chunks.length === 0) return;
+  const [first, ...rest] = chunks;
   if (!interaction.deferred && !interaction.replied) {
-    if (content.length <= max) {
-      await interaction.reply({ content });
-      return;
-    }
-    await interaction.reply({ content: content.slice(0, max) });
-    await sendChunked(
-      (c) => interaction.followUp({ content: c }),
-      content.slice(max),
-    );
-    return;
-  }
-  if (content.length <= max) {
-    if (interaction.deferred && !interaction.replied) {
-      await interaction.editReply({ content });
-    } else {
-      await interaction.followUp({ content });
-    }
-    return;
-  }
-  const first = content.slice(0, max);
-  const rest = content.slice(max);
-  if (interaction.deferred && !interaction.replied) {
+    await interaction.reply({ content: first });
+  } else if (interaction.deferred && !interaction.replied) {
     await interaction.editReply({ content: first });
   } else {
     await interaction.followUp({ content: first });
   }
-  await sendChunked((c) => interaction.followUp({ content: c }), rest);
+  for (const chunk of rest) {
+    await interaction.followUp({ content: chunk });
+  }
 }
 
 async function ensureWorkspace(agentCwd: string): Promise<void> {
@@ -861,7 +842,10 @@ async function handleSlash(
     const model = await resolveModel(cfg, cfg.dataDir, interaction.user.id);
     runEphemeralPrompt(agentOpts(cfg, model), prompt, interaction.user.id)
       .then(async (text) => {
-        await interaction.followUp(`🧵 background:\n${text.slice(0, 1800)}`);
+        await sendChunked(
+          (c) => interaction.followUp({ content: c }),
+          `🧵 background:\n${text}`,
+        );
       })
       .catch(async (err) => {
         await interaction

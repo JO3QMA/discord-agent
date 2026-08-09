@@ -105,6 +105,11 @@ function isTableSeparator(line: string): boolean {
   return /^\|?(\s*:?-+:?\s*\|)*\s*:?-+:?\s*\|?$/.test(t);
 }
 
+/** GFM: 3+ leading spaces → indented code, not a table row. */
+function isTableLine(line: string): boolean {
+  return /^ {0,2}\|/.test(line);
+}
+
 function isFenceClose(line: string, openTicks: number): boolean {
   const m = /^(```+)(?:\s*)$/.exec(line.trimStart());
   return !!m && m[1]!.length >= openTicks;
@@ -145,15 +150,16 @@ function parseBlocks(content: string): Block[] {
 
     // GFM table: header row + separator required (avoid treating "| foo" lists as tables).
     if (
-      line.trimStart().startsWith("|") &&
+      isTableLine(line) &&
       i + 1 < lines.length &&
+      isTableLine(lines[i + 1]!) &&
       isTableSeparator(lines[i + 1]!)
     ) {
       flushText();
       const header = [lines[i]!, lines[i + 1]!];
       i += 2;
       const rows: string[] = [];
-      while (i < lines.length && lines[i]!.trimStart().startsWith("|")) {
+      while (i < lines.length && isTableLine(lines[i]!)) {
         rows.push(lines[i]!);
         i += 1;
       }
@@ -205,7 +211,9 @@ function truncateRowAtCell(row: string, budget: number): {
   const slice = takeLen(row, budget);
   let cut = slice.length;
   while ((cut = slice.lastIndexOf("|", cut - 1)) >= 0) {
-    if (cut > 0 && slice[cut - 1] === "\\") continue;
+    let escapes = 0;
+    for (let i = cut - 1; i >= 0 && slice[i] === "\\"; i--) escapes += 1;
+    if (escapes % 2 === 1) continue;
     return { kept: slice.slice(0, cut + 1), rest: row.slice(cut + 1) };
   }
   return { kept: slice, rest: row.slice(slice.length) };

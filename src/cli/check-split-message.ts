@@ -118,14 +118,18 @@ function main() {
   );
 
   const oneCol = "| h |\n| --- |\n| v |";
+  const oneColChunks = splitMessage(oneCol);
+  assert(oneColChunks[0] !== undefined, "single-column table produces a chunk");
   assert(
-    splitMessage(oneCol)[0]!.includes("| --- |"),
+    oneColChunks[0].includes("| --- |"),
     "single-column table separator recognized",
   );
 
   const noTrailPipe = "| a | b\n| --- | ---\n| 1 | 2 |";
+  const noTrailChunks = splitMessage(noTrailPipe);
+  assert(noTrailChunks[0] !== undefined, "no-trailing-pipe table produces a chunk");
   assert(
-    splitMessage(noTrailPipe)[0]!.includes("| --- | ---"),
+    noTrailChunks[0].includes("| --- | ---"),
     "separator without trailing pipe recognized",
   );
 
@@ -138,6 +142,23 @@ function main() {
   assert(
     escChunks.every((c) => c.includes("| h |")),
     "escaped-pipe row keeps header",
+  );
+
+  // Two backslashes + pipe is a real separator (even escape count).
+  const evenEsc =
+    "| h |\n| --- |\n| a\\\\\\\\| " + "y".repeat(50) + " | z |";
+  const evenChunks = splitMessage(evenEsc, 55);
+  assert(evenChunks[0] !== undefined, "even-escape row produces a chunk");
+  assert(evenChunks.length >= 2, "even-escape row splits");
+  assert(evenChunks[0].trimEnd().endsWith("|"), "even backslashes allow pipe as boundary");
+
+  const indented = "   | h |\n   | --- |\n   | v |";
+  const ind = splitMessage(indented);
+  assert(ind[0] !== undefined && ind[0] === indented, "3-space indented pipes stay plain text");
+  const indChunks = splitMessage(indented + "\n\n" + "z".repeat(100), 40);
+  assert(
+    indChunks.filter((c) => c.includes("| h |") && c.includes("| --- |")).length <= 1,
+    "indented pipes do not get table header-repeat split",
   );
 
   console.log("check-split-message: ok");

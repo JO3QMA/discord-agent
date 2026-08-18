@@ -186,31 +186,39 @@ export async function buildSystemPreamble(
 export type AgentHandles = {
   apiKey: string;
   modelId: string;
-  /** Composer 系のみ適用。省略時は false（非 fast）。 */
+  /** 省略時は false（非 fast）。全モデルに fast param を明示する。 */
   modelFast?: boolean;
+  /** 省略時は effort param を送らない。 */
+  modelEffort?: string | null;
   dataDir: string;
   agentCwd: string;
 };
 
-/** Build SDK ModelSelection. Composer omits params → default variant is fast=true. */
+export type ModelSelectionParams = Array<{ id: string; value: string }>;
+
+/** Build SDK ModelSelection. Omitting params lets SDK pick first allowed (often fast=true). */
 export function toModelSelection(
   modelId: string,
   modelFast = false,
-): { id: string; params?: Array<{ id: string; value: string }> } {
-  if (modelId.startsWith("composer")) {
-    return {
-      id: modelId,
-      params: [{ id: "fast", value: modelFast ? "true" : "false" }],
-    };
-  }
-  return { id: modelId };
+  modelEffort?: string | null,
+): { id: string; params: ModelSelectionParams } {
+  // ponytail: always send fast; extra params are ignored if the model lacks them.
+  // Catalog-driven params would need Cursor.models.list() per API key.
+  const params: ModelSelectionParams = [
+    { id: "fast", value: modelFast ? "true" : "false" },
+  ];
+  if (modelEffort) params.unshift({ id: "effort", value: modelEffort });
+  return { id: modelId, params };
 }
 
-export function formatModelLabel(modelId: string, modelFast = false): string {
-  if (modelId.startsWith("composer")) {
-    return `${modelId} (fast=${modelFast})`;
-  }
-  return modelId;
+export function formatModelLabel(
+  modelId: string,
+  modelFast = false,
+  modelEffort?: string | null,
+): string {
+  const bits = [`fast=${modelFast}`];
+  if (modelEffort) bits.unshift(`effort=${modelEffort}`);
+  return `${modelId} (${bits.join(", ")})`;
 }
 
 export type OpenedAgent = {
@@ -229,7 +237,11 @@ export async function openAgent(
   );
   const common = {
     apiKey: opts.apiKey,
-    model: toModelSelection(opts.modelId, opts.modelFast ?? false),
+    model: toModelSelection(
+      opts.modelId,
+      opts.modelFast ?? false,
+      opts.modelEffort,
+    ),
     mcpServers,
     local: { cwd: opts.agentCwd },
   };

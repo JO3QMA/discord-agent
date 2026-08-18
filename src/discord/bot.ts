@@ -338,6 +338,7 @@ function agentOpts(cfg: AppConfig, modelId: string) {
     apiKey: cfg.cursorApiKey,
     modelId,
     modelFast: cfg.modelFast,
+    modelEffort: cfg.modelEffort,
     dataDir: cfg.dataDir,
     agentCwd: cfg.agentCwd,
   };
@@ -647,7 +648,7 @@ async function handleSlash(
     if (!n) {
       const cur = s.modelByOperator[op] || cfg.modelId;
       await interaction.reply(
-        `現在のモデル: \`${formatModelLabel(cur, cfg.modelFast)}\``,
+        `現在のモデル: \`${formatModelLabel(cur, cfg.modelFast, cfg.modelEffort)}\``,
       );
       return;
     }
@@ -657,7 +658,7 @@ async function handleSlash(
     delete store[key];
     await saveSessionStore(cfg.dataDir, store);
     await interaction.reply(
-      `モデルを \`${formatModelLabel(n, cfg.modelFast)}\` に切替（Operator 付帯・次回 create）`,
+      `モデルを \`${formatModelLabel(n, cfg.modelFast, cfg.modelEffort)}\` に切替（Operator 付帯・次回 create）`,
     );
     return;
   }
@@ -666,7 +667,7 @@ async function handleSlash(
     const store = await loadSessionStore(cfg.dataDir);
     const meta = store[key];
     const model = await resolveModel(cfg, cfg.dataDir, interaction.user.id);
-    const label = formatModelLabel(model, cfg.modelFast);
+    const label = formatModelLabel(model, cfg.modelFast, cfg.modelEffort);
     if (!meta) {
       await interaction.reply(`model=\`${label}\` — まだセッションなし`);
       return;
@@ -1129,7 +1130,7 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
 
   client.once(Events.ClientReady, async (readyClient) => {
     console.log(`discord ready as ${readyClient.user.tag}`);
-    console.log(`model ${formatModelLabel(cfg.modelId, cfg.modelFast)}`);
+    console.log(`model ${formatModelLabel(cfg.modelId, cfg.modelFast, cfg.modelEffort)}`);
     try {
       await registerSlashCommands(cfg, readyClient.application.id);
     } catch (err) {

@@ -72,7 +72,7 @@ docker compose up -d
 
 **会話**（Discord）の鍵: 通常／DM は `channel:<id>`（場所共有）、スレッドは `thread:<id>`。**セッション**は Cursor 側。**Operator 鍵** `user:<id>` に人格・USER。旧鍵は移行しない。
 
-Composer（`CURSOR_MODEL=composer-2.5`）は **params 省略時に SDK デフォルトが fast**。ゲートウェイは既定で `CURSOR_MODEL_FAST=false` を明示する。fast にしたいときだけ `true`。
+`CURSOR_MODEL_FAST`（既定 `false`）は全モデルに `fast` param を明示する。`CURSOR_MODEL_EFFORT`（`low|medium|high|xhigh`）は任意。未設定なら effort は送らずモデル既定に任せる。
 
 `DISCORD_GUILD_ID` あり: ギルドへ即時登録し、**グローバルコマンドは空クリア**（二重表示防止）。なし: グローバルのみ（反映に最大約1時間）。
 

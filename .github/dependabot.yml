@@ -14,6 +14,10 @@ updates:
       - dependency-name: "*"
         update-types:
           - version-update:semver-major
+      # prism-media@1.3.5 peerOptional is opusscript@^0.0.8; 0.1.x fails npm ci
+      - dependency-name: opusscript
+        versions:
+          - ">0.0.8"
     groups:
       npm:
         patterns:

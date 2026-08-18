@@ -8,9 +8,12 @@ import path from "node:path";
 import {
   clearSessionKey,
   commitSessionMeta,
+  formatModelLabel,
   loadSessionStore,
   saveSessionStore,
+  toModelSelection,
 } from "../agent/session.js";
+import { parseModelEffort } from "../config.js";
 import {
   conversationKey,
   operatorKey,
@@ -62,6 +65,38 @@ async function main() {
   if (!bob.entries.some((e) => e.includes("coffee"))) throw new Error("bob USER");
   if (alice.entries.some((e) => e.includes("coffee"))) {
     throw new Error("USER leaked across operators");
+  }
+
+  const composer = toModelSelection("composer-2.5", false);
+  if (JSON.stringify(composer.params) !== JSON.stringify([{ id: "fast", value: "false" }])) {
+    throw new Error("composer should always send fast=false by default");
+  }
+  const grok = toModelSelection("grok-4.6", false, "high");
+  if (
+    JSON.stringify(grok.params) !==
+    JSON.stringify([
+      { id: "effort", value: "high" },
+      { id: "fast", value: "false" },
+    ])
+  ) {
+    throw new Error("grok should send effort+fast params");
+  }
+  const grokNoEffort = toModelSelection("grok-4.6", true);
+  if (JSON.stringify(grokNoEffort.params) !== JSON.stringify([{ id: "fast", value: "true" }])) {
+    throw new Error("grok without effort should still send fast");
+  }
+  if (formatModelLabel("grok-4.6", false, "xhigh") !== "grok-4.6 (effort=xhigh, fast=false)") {
+    throw new Error("formatModelLabel should show effort+fast");
+  }
+  if (parseModelEffort(undefined) !== null) throw new Error("unset effort is null");
+  if (parseModelEffort("HIGH") !== "high") throw new Error("effort is case-insensitive");
+  try {
+    parseModelEffort("max");
+    throw new Error("invalid effort should throw");
+  } catch (err) {
+    if (!(err instanceof Error) || !err.message.includes("CURSOR_MODEL_EFFORT")) {
+      throw err;
+    }
   }
 
   console.log("check:session OK");

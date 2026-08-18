@@ -9,6 +9,7 @@ import { ensureMemoryLayout, memoryList } from "../memory/store.js";
 import { ensureSkillsLayout } from "../skills/store.js";
 import { openAgent, runUserTurn } from "../agent/session.js";
 import { runPostTurnReview } from "../agent/review.js";
+import { parseModelEffort } from "../config.js";
 
 async function main() {
   const key = process.env.CURSOR_API_KEY?.trim();
@@ -27,6 +28,7 @@ async function main() {
     apiKey: key,
     modelId: process.env.CURSOR_MODEL?.trim() || "composer-2.5",
     modelFast: process.env.CURSOR_MODEL_FAST?.trim().toLowerCase() === "true",
+    modelEffort: parseModelEffort(process.env.CURSOR_MODEL_EFFORT),
     dataDir,
     agentCwd: cwd,
   });

@@ -32,6 +32,18 @@ function parseBool(raw: string | undefined, defaultValue: boolean): boolean {
   throw new Error(`invalid boolean ${JSON.stringify(raw)}; use true/false`);
 }
 
+export const MODEL_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+export type ModelEffort = (typeof MODEL_EFFORTS)[number];
+
+export function parseModelEffort(raw: string | undefined): ModelEffort | null {
+  if (raw === undefined || raw.trim() === "") return null;
+  const v = raw.trim().toLowerCase();
+  if ((MODEL_EFFORTS as readonly string[]).includes(v)) return v as ModelEffort;
+  throw new Error(
+    `CURSOR_MODEL_EFFORT must be ${MODEL_EFFORTS.join("|")} (got ${JSON.stringify(raw)})`,
+  );
+}
+
 export type AppConfig = {
   cursorApiKey: string;
   discordBotToken: string;
@@ -49,10 +61,12 @@ export type AppConfig = {
   agentCwd: string;
   modelId: string;
   /**
-   * Composer 系は params 省略時に SDK デフォルトが fast=true。
-   * 明示しないと composer-2.5-fast 相当になる。
+   * SDK は params 省略時に許可値の先頭を使う（Composer / Grok は fast=true になりやすい）。
+   * ゲートウェイは常に fast を明示する。
    */
   modelFast: boolean;
+  /** 未設定なら effort param を送らない（モデル既定に任せる）。 */
+  modelEffort: ModelEffort | null;
   memoryNotifications: "off" | "on";
   /** Send a message to /sethome channel on gateway start. */
   homeNotifyOnStart: boolean;
@@ -77,6 +91,7 @@ export function loadConfig(): AppConfig {
     agentCwd,
     modelId: process.env.CURSOR_MODEL?.trim() || "composer-2.5",
     modelFast: parseBool(process.env.CURSOR_MODEL_FAST, false),
+    modelEffort: parseModelEffort(process.env.CURSOR_MODEL_EFFORT),
     memoryNotifications: notif,
     homeNotifyOnStart: parseBool(process.env.HOME_NOTIFY_ON_START, true),
   };

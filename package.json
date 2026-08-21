@@ -18,6 +18,7 @@
     "check:session": "tsx src/cli/check-session.ts",
     "check:operator-block": "tsx src/cli/check-operator-block.ts",
     "check:split-message": "tsx src/cli/check-split-message.ts",
+    "check:review": "tsx src/cli/check-review.ts",
     "smoke:sdk": "tsx src/cli/smoke-sdk.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

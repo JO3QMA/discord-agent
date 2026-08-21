@@ -67,6 +67,12 @@ export type AppConfig = {
   modelFast: boolean;
   /** 未設定なら effort param を送らない（モデル既定に任せる）。 */
   modelEffort: ModelEffort | null;
+  /** 定着レビュー用。未設定なら本体と同じ `modelId`。 */
+  reviewModelId: string;
+  /** 定着レビュー用。既定 true（本体の modelFast とは独立）。 */
+  reviewModelFast: boolean;
+  /** 定着レビュー用。未設定なら effort param を送らない。 */
+  reviewModelEffort: ModelEffort | null;
   memoryNotifications: "off" | "on";
   /** Send a message to /sethome channel on gateway start. */
   homeNotifyOnStart: boolean;
@@ -80,6 +86,7 @@ export function loadConfig(): AppConfig {
     throw new Error("MEMORY_NOTIFICATIONS must be off|on");
   }
   const guildId = process.env.DISCORD_GUILD_ID?.trim() || null;
+  const modelId = process.env.CURSOR_MODEL?.trim() || "composer-2.5";
   return {
     cursorApiKey: requireEnv("CURSOR_API_KEY"),
     discordBotToken: requireEnv("DISCORD_BOT_TOKEN"),
@@ -89,9 +96,12 @@ export function loadConfig(): AppConfig {
     discordGuildId: guildId,
     dataDir,
     agentCwd,
-    modelId: process.env.CURSOR_MODEL?.trim() || "composer-2.5",
+    modelId,
     modelFast: parseBool(process.env.CURSOR_MODEL_FAST, false),
     modelEffort: parseModelEffort(process.env.CURSOR_MODEL_EFFORT),
+    reviewModelId: process.env.REVIEW_MODEL?.trim() || modelId,
+    reviewModelFast: parseBool(process.env.REVIEW_MODEL_FAST, true),
+    reviewModelEffort: parseModelEffort(process.env.REVIEW_MODEL_EFFORT),
     memoryNotifications: notif,
     homeNotifyOnStart: parseBool(process.env.HOME_NOTIFY_ON_START, true),
   };

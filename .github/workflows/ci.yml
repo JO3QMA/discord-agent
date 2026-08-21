@@ -30,5 +30,7 @@ jobs:
 
       - run: npm run check:mcp
 
+      - run: npm run check:review
+
       - name: Docker build
         run: docker build -t discord-agent:ci .

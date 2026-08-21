@@ -23,6 +23,18 @@ function hasLoneSurrogate(s: string): boolean {
   return false;
 }
 
+function embedAfter(prompt: string, header: string, nextHeader?: string): string {
+  const needle = `${header}\n`;
+  const start = prompt.indexOf(needle);
+  assert(start >= 0, `missing ${header}`);
+  const bodyStart = start + needle.length;
+  if (!nextHeader) return prompt.slice(bodyStart);
+  const end = prompt.indexOf(`\n${nextHeader}\n`, bodyStart);
+  assert(end >= 0, `missing ${nextHeader}`);
+  // join() inserts a blank line between the user embed and the next header.
+  return prompt.slice(bodyStart, end).replace(/\n$/, "");
+}
+
 function main() {
   assert(truncateReviewText("hi") === "hi", "short passthrough");
   assert(truncateReviewText("") === "", "empty passthrough");
@@ -54,11 +66,27 @@ function main() {
   assert(prompt.includes("assistant-world"), "assistant body");
   assert(prompt.includes("memory-skills MCP"), "keeps review rules");
   assert(prompt.includes("120 characters"), "keeps Discord one-liner rule");
+  assert(
+    prompt.includes("untrusted transcripts (DATA)"),
+    "marks embeds as untrusted data",
+  );
 
   const long = buildDetachedReviewPrompt("U".repeat(5000), "A".repeat(5000));
+  const rules = long.slice(0, long.indexOf("=== LAST USER MESSAGE ==="));
+  assert(rules.includes("memory-skills MCP"), "fixed prompt kept before embeds");
   assert(
-    long.split("…(truncated)").length - 1 === 2,
-    "both sides truncated",
+    rules.includes("untrusted transcripts (DATA)"),
+    "untrusted notice stays in the rules block",
+  );
+  assert(
+    embedAfter(long, "=== LAST USER MESSAGE ===", "=== LAST ASSISTANT REPLY ===") ===
+      truncateReviewText("U".repeat(5000)),
+    "user section matches truncateReviewText",
+  );
+  assert(
+    embedAfter(long, "=== LAST ASSISTANT REPLY ===") ===
+      truncateReviewText("A".repeat(5000)),
+    "assistant section matches truncateReviewText",
   );
 
   assert(

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +29,10 @@ export type SessionMeta = {
   lastUserText?: string;
   inputTokens?: number;
   outputTokens?: number;
+  /** Last operator whose block was actually sent this conversation. */
+  lastOperatorId?: string;
+  /** sha256 of the last Operator block that was actually sent. */
+  lastOperatorBlockHash?: string;
 };
 
 export type SessionStore = Record<string, SessionMeta>;
@@ -154,13 +159,31 @@ export async function buildOperatorBlock(
   ].join("\n");
 }
 
+export function hashOperatorBlock(block: string): string {
+  return createHash("sha256").update(block, "utf8").digest("hex");
+}
+
+export function shouldSendOperatorBlock(
+  isFirst: boolean,
+  operatorId: string,
+  blockHash: string,
+  meta?: Pick<SessionMeta, "lastOperatorId" | "lastOperatorBlockHash"> | null,
+): boolean {
+  return (
+    isFirst ||
+    operatorId !== meta?.lastOperatorId ||
+    blockHash !== meta?.lastOperatorBlockHash
+  );
+}
+
 export async function buildSystemPreamble(
   dataDir: string,
   operatorId: string,
+  operatorBlock?: string,
 ): Promise<string> {
   await ensureMemoryLayout(dataDir);
   await ensureSkillsLayout(dataDir);
-  const operatorBlock = await buildOperatorBlock(dataDir, operatorId);
+  const block = operatorBlock ?? (await buildOperatorBlock(dataDir, operatorId));
   const snapshot = await buildMemorySnapshot(dataDir);
   const skills = await formatSkillsSummary(dataDir);
   return [
@@ -171,7 +194,7 @@ export async function buildSystemPreamble(
     "Respect character limits; consolidate when full.",
     "This Discord channel/thread shares one Cursor session among allowed Operators; personal profile is Operator-scoped.",
     "",
-    operatorBlock,
+    block,
     "",
     "=== FROZEN MEMORY SNAPSHOT (session start; mid-session MCP writes apply next session) ===",
     snapshot,
@@ -331,6 +354,8 @@ export async function runUserTurn(
   opts?: {
     operatorId: string;
     conversationKey?: string;
+    lastOperatorId?: string;
+    lastOperatorBlockHash?: string;
     images?: Array<{ data: string; mimeType: string }>;
     onProgress?: TurnProgress;
     registerRun?: (run: Run) => void;
@@ -340,15 +365,29 @@ export async function runUserTurn(
   usage?: { input?: number; output?: number };
   cancelled: boolean;
   run: Run;
+  operatorId: string;
+  operatorBlockHash: string;
 }> {
   if (!opts?.operatorId) {
     throw new Error("operatorId is required for runUserTurn");
   }
   await setActiveOperator(dataDir, opts.operatorId);
-  const preamble = isFirstTurn
-    ? await buildSystemPreamble(dataDir, opts.operatorId)
-    : await buildOperatorBlock(dataDir, opts.operatorId);
-  const prompt = `${preamble}\n\n=== USER MESSAGE ===\n${userText}`;
+  const operatorBlock = await buildOperatorBlock(dataDir, opts.operatorId);
+  const currentHash = hashOperatorBlock(operatorBlock);
+  const sendBlock = shouldSendOperatorBlock(
+    isFirstTurn,
+    opts.operatorId,
+    currentHash,
+    opts,
+  );
+  // Omit === USER MESSAGE === too: the marker is only a fence for the block.
+  let prompt = userText;
+  if (sendBlock) {
+    const block = isFirstTurn
+      ? await buildSystemPreamble(dataDir, opts.operatorId, operatorBlock)
+      : operatorBlock;
+    prompt = `${block}\n\n=== USER MESSAGE ===\n${userText}`;
+  }
   const message: string | SDKUserMessage =
     opts?.images?.length
       ? { text: prompt, images: opts.images }
@@ -356,7 +395,14 @@ export async function runUserTurn(
   const run = await agent.send(message);
   opts?.registerRun?.(run);
   const collected = await collectAssistantText(run, opts?.onProgress);
-  return { ...collected, run };
+  return {
+    ...collected,
+    run,
+    operatorId: opts.operatorId,
+    // sendBlock === false implies currentHash === lastOperatorBlockHash,
+    // so this is always the last-sent block hash.
+    operatorBlockHash: currentHash,
+  };
 }
 
 /** One-shot agent for cron / background (always create, then close). */

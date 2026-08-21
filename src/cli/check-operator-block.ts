@@ -37,6 +37,14 @@ function main() {
     shouldSendOperatorBlock(false, "B", hB, metaA),
     "operator change sends",
   );
+  assert(
+    shouldSendOperatorBlock(false, "B", hA, metaA),
+    "operator change sends even when hashes match",
+  );
+  assert(
+    shouldSendOperatorBlock(false, "A", hA, null),
+    "null meta sends",
+  );
 
   const metaB = { lastOperatorId: "B", lastOperatorBlockHash: hB };
   assert(

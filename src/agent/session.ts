@@ -381,9 +381,13 @@ export async function runUserTurn(
     opts,
   );
   // Omit === USER MESSAGE === too: the marker is only a fence for the block.
-  const prompt = sendBlock
-    ? `${isFirstTurn ? await buildSystemPreamble(dataDir, opts.operatorId, operatorBlock) : operatorBlock}\n\n=== USER MESSAGE ===\n${userText}`
-    : userText;
+  let prompt = userText;
+  if (sendBlock) {
+    const block = isFirstTurn
+      ? await buildSystemPreamble(dataDir, opts.operatorId, operatorBlock)
+      : operatorBlock;
+    prompt = `${block}\n\n=== USER MESSAGE ===\n${userText}`;
+  }
   const message: string | SDKUserMessage =
     opts?.images?.length
       ? { text: prompt, images: opts.images }
@@ -395,10 +399,9 @@ export async function runUserTurn(
     ...collected,
     run,
     operatorId: opts.operatorId,
-    // Omitted turn: keep the last *sent* hash, not a newly computed one.
-    operatorBlockHash: sendBlock
-      ? currentHash
-      : (opts.lastOperatorBlockHash ?? currentHash),
+    // sendBlock === false implies currentHash === lastOperatorBlockHash,
+    // so this is always the last-sent block hash.
+    operatorBlockHash: currentHash,
   };
 }
 

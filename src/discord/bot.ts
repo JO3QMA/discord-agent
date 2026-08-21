@@ -983,9 +983,13 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
             text: answer,
             usage,
             cancelled,
+            operatorId: sentOperatorId,
+            operatorBlockHash,
           } = await runUserTurn(agent, cfg.dataDir, text, isFirst, {
             operatorId: turn.userId,
             conversationKey: turn.key,
+            lastOperatorId: meta?.lastOperatorId,
+            lastOperatorBlockHash: meta?.lastOperatorBlockHash,
             images,
             onProgress,
             registerRun: (run) => {
@@ -1036,6 +1040,9 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
             lastUserText: text,
             inputTokens: (meta?.inputTokens ?? 0) + (usage?.input ?? 0),
             outputTokens: (meta?.outputTokens ?? 0) + (usage?.output ?? 0),
+            // Dropping these resets the hash and resends the block every turn.
+            lastOperatorId: sentOperatorId,
+            lastOperatorBlockHash: operatorBlockHash,
           };
           const saved = await commitSessionMeta(
             cfg.dataDir,

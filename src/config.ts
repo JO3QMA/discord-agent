@@ -24,7 +24,7 @@ function parseAllowedUserIds(raw: string): Set<string> {
   return ids;
 }
 
-function parseBool(raw: string | undefined, defaultValue: boolean): boolean {
+export function parseBool(raw: string | undefined, defaultValue: boolean): boolean {
   if (raw === undefined || raw.trim() === "") return defaultValue;
   const v = raw.trim().toLowerCase();
   if (["1", "true", "yes", "on"].includes(v)) return true;
@@ -35,12 +35,15 @@ function parseBool(raw: string | undefined, defaultValue: boolean): boolean {
 export const MODEL_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 export type ModelEffort = (typeof MODEL_EFFORTS)[number];
 
-export function parseModelEffort(raw: string | undefined): ModelEffort | null {
+export function parseModelEffort(
+  raw: string | undefined,
+  label = "CURSOR_MODEL_EFFORT",
+): ModelEffort | null {
   if (raw === undefined || raw.trim() === "") return null;
   const v = raw.trim().toLowerCase();
   if ((MODEL_EFFORTS as readonly string[]).includes(v)) return v as ModelEffort;
   throw new Error(
-    `CURSOR_MODEL_EFFORT must be ${MODEL_EFFORTS.join("|")} (got ${JSON.stringify(raw)})`,
+    `${label} must be ${MODEL_EFFORTS.join("|")} (got ${JSON.stringify(raw)})`,
   );
 }
 
@@ -101,7 +104,10 @@ export function loadConfig(): AppConfig {
     modelEffort: parseModelEffort(process.env.CURSOR_MODEL_EFFORT),
     reviewModelId: process.env.REVIEW_MODEL?.trim() || modelId,
     reviewModelFast: parseBool(process.env.REVIEW_MODEL_FAST, true),
-    reviewModelEffort: parseModelEffort(process.env.REVIEW_MODEL_EFFORT),
+    reviewModelEffort: parseModelEffort(
+      process.env.REVIEW_MODEL_EFFORT,
+      "REVIEW_MODEL_EFFORT",
+    ),
     memoryNotifications: notif,
     homeNotifyOnStart: parseBool(process.env.HOME_NOTIFY_ON_START, true),
   };

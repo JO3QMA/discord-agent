@@ -9,7 +9,7 @@ import { ensureMemoryLayout, memoryList } from "../memory/store.js";
 import { ensureSkillsLayout } from "../skills/store.js";
 import { openAgent, runUserTurn } from "../agent/session.js";
 import { runDetachedReview } from "../agent/review.js";
-import { parseModelEffort } from "../config.js";
+import { parseBool, parseModelEffort } from "../config.js";
 
 async function main() {
   const key = process.env.CURSOR_API_KEY?.trim();
@@ -42,18 +42,17 @@ async function main() {
     console.log("assistant:", text.slice(0, 500));
 
     const conversationId = agent.agentId;
-    const reviewFastRaw = process.env.REVIEW_MODEL_FAST?.trim().toLowerCase();
     const review = await runDetachedReview({
       apiKey: key,
       modelId:
         process.env.REVIEW_MODEL?.trim() ||
         process.env.CURSOR_MODEL?.trim() ||
         "composer-2.5",
-      modelFast:
-        reviewFastRaw === undefined || reviewFastRaw === ""
-          ? true
-          : reviewFastRaw === "true",
-      modelEffort: parseModelEffort(process.env.REVIEW_MODEL_EFFORT),
+      modelFast: parseBool(process.env.REVIEW_MODEL_FAST, true),
+      modelEffort: parseModelEffort(
+        process.env.REVIEW_MODEL_EFFORT,
+        "REVIEW_MODEL_EFFORT",
+      ),
       dataDir,
       agentCwd: cwd,
       operatorId: "smoke-user",

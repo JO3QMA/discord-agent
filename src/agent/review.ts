@@ -1,4 +1,4 @@
-import { Agent } from "@cursor/sdk";
+import { Agent, type SDKAgent } from "@cursor/sdk";
 import {
   builtinMcpConfig,
   collectAssistantText,
@@ -23,6 +23,11 @@ const TRUNCATION_MARK = "…(truncated)";
 // extraction from long coding turns starts missing the tail.
 export const REVIEW_TEXT_CAP = 4000;
 
+// ponytail: 5 min covers a slow model + a couple of MCP writes. A hung review
+// would block commitSessionMeta and the conversation agent's close(). Env-ize
+// if ops need to tune without a rebuild.
+const REVIEW_TIMEOUT_MS = 5 * 60_000;
+
 export function truncateReviewText(
   text: string,
   cap = REVIEW_TEXT_CAP,
@@ -30,6 +35,15 @@ export function truncateReviewText(
   if (text.length <= cap) return text;
   const room = Math.max(0, cap - TRUNCATION_MARK.length);
   return text.slice(0, room) + TRUNCATION_MARK;
+}
+
+/** Neutralize line-start `===` so embedded text cannot forge section markers. */
+export function sanitizeReviewEmbed(text: string): string {
+  return text.replace(/^(\s*)(===)/gm, "$1\u200B$2");
+}
+
+function prepareReviewEmbed(text: string): string {
+  return sanitizeReviewEmbed(truncateReviewText(text));
 }
 
 export function buildDetachedReviewPrompt(
@@ -40,11 +54,20 @@ export function buildDetachedReviewPrompt(
     REVIEW_PROMPT,
     "",
     "=== LAST USER MESSAGE ===",
-    truncateReviewText(userText),
+    prepareReviewEmbed(userText),
     "",
     "=== LAST ASSISTANT REPLY ===",
-    truncateReviewText(assistantText),
+    prepareReviewEmbed(assistantText),
   ].join("\n");
+}
+
+async function closeReviewAgent(agent: SDKAgent | undefined): Promise<void> {
+  if (!agent) return;
+  try {
+    await agent.close();
+  } catch (err) {
+    console.error("detached review: agent close failed:", err);
+  }
 }
 
 export async function runDetachedReview(
@@ -54,17 +77,25 @@ export async function runDetachedReview(
     assistantText: string;
   },
 ): Promise<string> {
-  const agent = await Agent.create({
-    apiKey: opts.apiKey,
-    model: toModelSelection(
-      opts.modelId,
-      opts.modelFast ?? true,
-      opts.modelEffort,
-    ),
-    mcpServers: builtinMcpConfig(opts.dataDir, opts.operatorId),
-    local: { cwd: opts.agentCwd },
+  let agent: SDKAgent | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("detached review timed out")),
+      REVIEW_TIMEOUT_MS,
+    );
   });
-  try {
+  const work = (async () => {
+    agent = await Agent.create({
+      apiKey: opts.apiKey,
+      model: toModelSelection(
+        opts.modelId,
+        opts.modelFast ?? true,
+        opts.modelEffort,
+      ),
+      mcpServers: builtinMcpConfig(opts.dataDir, opts.operatorId),
+      local: { cwd: opts.agentCwd },
+    });
     const run = await agent.send(
       buildDetachedReviewPrompt(opts.userText, opts.assistantText),
     );
@@ -75,7 +106,12 @@ export async function runDetachedReview(
         .map((l: string) => l.trim())
         .find(Boolean) ?? "No memory changes";
     return line.slice(0, 200);
+  })();
+  try {
+    return await Promise.race([work, timeout]);
   } finally {
-    await agent.close();
+    if (timer !== undefined) clearTimeout(timer);
+    await closeReviewAgent(agent);
+    void work.catch(() => {});
   }
 }

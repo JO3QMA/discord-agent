@@ -52,7 +52,7 @@ async function main() {
   if (!text.includes("mcp-check-ok") && !text.includes('"success":true')) {
     // still ok if structured content differs
   }
-  await client.callTool({
+  const userAdd = await client.callTool({
     name: "memory",
     arguments: {
       action: "add",
@@ -60,6 +60,9 @@ async function main() {
       content: "env-operator-hit",
     },
   });
+  if (userAdd.isError) {
+    throw new Error(`memory add failed: ${JSON.stringify(userAdd)}`);
+  }
   const envUser = path.join(dataDir, "memories", "operators", "env-op", "USER.md");
   const fileUser = path.join(dataDir, "memories", "operators", "file-op", "USER.md");
   const envBody = await fs.readFile(envUser, "utf8");

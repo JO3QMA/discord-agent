@@ -24,6 +24,8 @@ jobs:
 
       - run: npm run check:session
 
+      - run: npm run check:operator-block
+
       - run: npm run check:search
 
       - run: npm run check:mcp

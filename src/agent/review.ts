@@ -33,7 +33,15 @@ export function truncateReviewText(
   cap = REVIEW_TEXT_CAP,
 ): string {
   if (text.length <= cap) return text;
-  const room = Math.max(0, cap - TRUNCATION_MARK.length);
+  let room = Math.max(0, cap - TRUNCATION_MARK.length);
+  // Avoid a lone high surrogate when the cut lands inside a pair (emoji etc.).
+  if (
+    room > 0 &&
+    text.charCodeAt(room - 1) >= 0xd800 &&
+    text.charCodeAt(room - 1) <= 0xdbff
+  ) {
+    room -= 1;
+  }
   return text.slice(0, room) + TRUNCATION_MARK;
 }
 
@@ -111,7 +119,12 @@ export async function runDetachedReview(
     return await Promise.race([work, timeout]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
-    await closeReviewAgent(agent);
-    void work.catch(() => {});
+    if (agent === undefined) {
+      // Agent.create was still in flight when the race ended; close it once it lands.
+      void work.finally(() => closeReviewAgent(agent)).catch(() => {});
+    } else {
+      await closeReviewAgent(agent);
+      void work.catch(() => {});
+    }
   }
 }

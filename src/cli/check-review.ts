@@ -9,6 +9,20 @@ function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(msg);
 }
 
+function hasLoneSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const n = s.charCodeAt(i + 1);
+      if (n < 0xdc00 || n > 0xdfff) return true;
+      i++;
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function main() {
   assert(truncateReviewText("hi") === "hi", "short passthrough");
   assert(truncateReviewText("") === "", "empty passthrough");
@@ -21,6 +35,17 @@ function main() {
   assert(cut.endsWith("…(truncated)"), "over cap marked");
   assert(cut.length === REVIEW_TEXT_CAP, "over cap stays at cap including mark");
   assert(!cut.startsWith("…"), "keeps the head, drops the tail");
+
+  const nearEmoji = truncateReviewText("x".repeat(REVIEW_TEXT_CAP - 1) + "😀");
+  assert(!hasLoneSurrogate(nearEmoji), "cap-1 + emoji stays well-formed");
+
+  const mark = "…(truncated)";
+  const room = REVIEW_TEXT_CAP - mark.length;
+  const splitEmoji = "x".repeat(room - 1) + "😀" + "y".repeat(50);
+  const splitCut = truncateReviewText(splitEmoji);
+  assert(splitCut.endsWith(mark), "surrogate-boundary cut still marked");
+  assert(!hasLoneSurrogate(splitCut), "cut does not leave a lone surrogate");
+  assert(!splitCut.includes("😀"), "emoji on the cut is dropped, not split");
 
   const prompt = buildDetachedReviewPrompt("user-hello", "assistant-world");
   assert(prompt.includes("=== LAST USER MESSAGE ==="), "user header");

@@ -31,6 +31,8 @@ import { getActiveOperator } from "../operator/active.js";
 const dataDir = process.env.DATA_DIR?.trim() || "./data";
 
 async function requireOperator(): Promise<string | { error: string }> {
+  const fromEnv = process.env.MCP_ACTIVE_OPERATOR?.trim();
+  if (fromEnv) return fromEnv;
   const id = await getActiveOperator(dataDir);
   if (!id) {
     return {

@@ -37,18 +37,23 @@ export type SessionMeta = {
 
 export type SessionStore = Record<string, SessionMeta>;
 
-function stdioEnv(dataDir: string): Record<string, string> {
+function stdioEnv(dataDir: string, operatorId?: string): Record<string, string> {
   const env: Record<string, string> = { DATA_DIR: dataDir };
   for (const [k, v] of Object.entries(process.env)) {
     if (v !== undefined) env[k] = v;
   }
+  if (operatorId) env.MCP_ACTIVE_OPERATOR = operatorId;
   return env;
 }
 
-export function builtinMcpConfig(dataDir: string): Record<string, McpServerConfig> {
+export function builtinMcpConfig(
+  dataDir: string,
+  operatorId?: string,
+): Record<string, McpServerConfig> {
   const compiled = path.resolve(__dirname, "../mcp/server.js");
   const source = path.resolve(__dirname, "../mcp/server.ts");
   const isTsRuntime = __dirname.includes(`${path.sep}src${path.sep}`);
+  const env = stdioEnv(dataDir, operatorId);
   if (isTsRuntime) {
     return {
       memorySkills: {
@@ -58,7 +63,7 @@ export function builtinMcpConfig(dataDir: string): Record<string, McpServerConfi
           path.resolve(__dirname, "../../node_modules/tsx/dist/cli.mjs"),
           source,
         ],
-        env: stdioEnv(dataDir),
+        env,
       },
     };
   }
@@ -67,7 +72,7 @@ export function builtinMcpConfig(dataDir: string): Record<string, McpServerConfi
       type: "stdio",
       command: process.execPath,
       args: [compiled],
-      env: stdioEnv(dataDir),
+      env,
     },
   };
 }

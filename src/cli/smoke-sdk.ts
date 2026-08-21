@@ -8,8 +8,8 @@ import path from "node:path";
 import { ensureMemoryLayout, memoryList } from "../memory/store.js";
 import { ensureSkillsLayout } from "../skills/store.js";
 import { openAgent, runUserTurn } from "../agent/session.js";
-import { runPostTurnReview } from "../agent/review.js";
-import { parseModelEffort } from "../config.js";
+import { runDetachedReview } from "../agent/review.js";
+import { parseBool, parseModelEffort } from "../config.js";
 
 async function main() {
   const key = process.env.CURSOR_API_KEY?.trim();
@@ -24,6 +24,8 @@ async function main() {
   await ensureSkillsLayout(dataDir);
   await fs.writeFile(path.join(cwd, "README.md"), "# smoke\n", "utf8");
 
+  const userText =
+    'Using the memory MCP tool only, add to target=memory the exact text "smoke-ok". Then reply with DONE.';
   const { agent } = await openAgent({
     apiKey: key,
     modelId: process.env.CURSOR_MODEL?.trim() || "composer-2.5",
@@ -34,17 +36,33 @@ async function main() {
   });
 
   try {
-    const { text } = await runUserTurn(
-      agent,
-      dataDir,
-      'Using the memory MCP tool only, add to target=memory the exact text "smoke-ok". Then reply with DONE.',
-      true,
-      { operatorId: "smoke-user" },
-    );
+    const { text } = await runUserTurn(agent, dataDir, userText, true, {
+      operatorId: "smoke-user",
+    });
     console.log("assistant:", text.slice(0, 500));
 
-    const review = await runPostTurnReview(agent);
-    console.log("review:", review);
+    const conversationId = agent.agentId;
+    const review = await runDetachedReview({
+      apiKey: key,
+      modelId:
+        process.env.REVIEW_MODEL?.trim() ||
+        process.env.CURSOR_MODEL?.trim() ||
+        "composer-2.5",
+      modelFast: parseBool(process.env.REVIEW_MODEL_FAST, true),
+      modelEffort: parseModelEffort(
+        process.env.REVIEW_MODEL_EFFORT,
+        "REVIEW_MODEL_EFFORT",
+      ),
+      dataDir,
+      agentCwd: cwd,
+      operatorId: "smoke-user",
+      userText,
+      assistantText: text,
+    });
+    console.log("review (detached):", review);
+    if (agent.agentId !== conversationId) {
+      throw new Error("detached review must not replace the conversation agent");
+    }
 
     const listed = await memoryList(dataDir, "memory");
     console.log("memory entries:", listed.entries);

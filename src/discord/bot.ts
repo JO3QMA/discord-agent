@@ -13,7 +13,7 @@ import {
 } from "discord.js";
 import type { Run } from "@cursor/sdk";
 import type { AppConfig } from "../config.js";
-import { runPostTurnReview } from "../agent/review.js";
+import { runDetachedReview } from "../agent/review.js";
 import {
   loadSessionStore,
   openAgent,
@@ -1027,7 +1027,17 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
 
           let reviewLine = "No memory changes";
           try {
-            reviewLine = await runPostTurnReview(agent);
+            reviewLine = await runDetachedReview({
+              apiKey: cfg.cursorApiKey,
+              modelId: cfg.reviewModelId,
+              modelFast: cfg.reviewModelFast,
+              modelEffort: cfg.reviewModelEffort,
+              dataDir: cfg.dataDir,
+              agentCwd: cfg.agentCwd,
+              operatorId: turn.userId,
+              userText: text,
+              assistantText: answer,
+            });
           } catch (err) {
             console.error("post-turn review failed:", err);
             reviewLine = "Review failed";

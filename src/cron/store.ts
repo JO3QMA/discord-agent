@@ -144,36 +144,44 @@ export function startCronScheduler(opts: {
   runAgent: CronRunAgent;
   intervalMs?: number;
 }): { stop: () => void } {
+  // ponytail: single-flight only; two gateway processes can still double-read cron.json
+  let inFlight = false;
   const tick = async () => {
-    const jobs = await loadCronJobs(opts.dataDir);
-    const now = new Date();
-    let changed = false;
-    for (const job of jobs) {
-      if (job.paused) continue;
-      if (new Date(job.nextRunAt) > now) continue;
-      try {
-        const text = job.noAgent
-          ? job.prompt
-          : await opts.runAgent(job.prompt);
-        await opts.deliver(job.channelId, `⏰ **${job.name}**\n${text}`);
-      } catch (err) {
-        await opts
-          .deliver(
-            job.channelId,
-            `⏰ **${job.name}** failed: ${err instanceof Error ? err.message : String(err)}`,
-          )
-          .catch(() => {});
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const jobs = await loadCronJobs(opts.dataDir);
+      const now = new Date();
+      let changed = false;
+      for (const job of jobs) {
+        if (job.paused) continue;
+        if (new Date(job.nextRunAt) > now) continue;
+        try {
+          const text = job.noAgent
+            ? job.prompt
+            : await opts.runAgent(job.prompt);
+          await opts.deliver(job.channelId, `⏰ **${job.name}**\n${text}`);
+        } catch (err) {
+          await opts
+            .deliver(
+              job.channelId,
+              `⏰ **${job.name}** failed: ${err instanceof Error ? err.message : String(err)}`,
+            )
+            .catch(() => {});
+        }
+        job.lastRunAt = now.toISOString();
+        const next = nextCronAfter(job.schedule, now);
+        if (!next) {
+          job.paused = true;
+        } else {
+          job.nextRunAt = next.toISOString();
+        }
+        changed = true;
       }
-      job.lastRunAt = now.toISOString();
-      const next = nextCronAfter(job.schedule, now);
-      if (!next) {
-        job.paused = true;
-      } else {
-        job.nextRunAt = next.toISOString();
-      }
-      changed = true;
+      if (changed) await saveCronJobs(opts.dataDir, jobs);
+    } finally {
+      inFlight = false;
     }
-    if (changed) await saveCronJobs(opts.dataDir, jobs);
   };
 
   const handle = setInterval(() => {

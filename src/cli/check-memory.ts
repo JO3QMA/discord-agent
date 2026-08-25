@@ -86,12 +86,29 @@ async function main() {
   assert(patchedNotes.content.includes("oat milk"), "patch NOTES.md");
 
   let threw = false;
-  try {
-    await viewSkill(dataDir, "hello-world", "../MEMORY.md");
-  } catch {
-    threw = true;
+  for (const rel of ["../MEMORY.md", "references/../NOTES.md"]) {
+    threw = false;
+    try {
+      await viewSkill(dataDir, "hello-world", rel);
+    } catch {
+      threw = true;
+    }
+    assert(threw, `view rejects ${rel}`);
+    threw = false;
+    try {
+      await writeSkillFile(dataDir, "hello-world", rel, "x");
+    } catch {
+      threw = true;
+    }
+    assert(threw, `write rejects ${rel}`);
+    threw = false;
+    try {
+      await patchSkill(dataDir, "hello-world", "a", "b", rel);
+    } catch {
+      threw = true;
+    }
+    assert(threw, `patch rejects ${rel}`);
   }
-  assert(threw, "path traversal rejected");
 
   threw = false;
   try {
@@ -104,28 +121,45 @@ async function main() {
   const outside = path.join(dataDir, "outside.md");
   await fs.writeFile(outside, "secret\n");
   const notesPath = path.join(dataDir, "skills", "hello-world", "NOTES.md");
-  await fs.rm(notesPath);
-  await fs.symlink(outside, notesPath);
-  threw = false;
-  try {
-    await viewSkill(dataDir, "hello-world", "NOTES.md");
-  } catch (err) {
-    threw = err instanceof Error && err.message.includes("symlink");
-  }
-  assert(threw, "NOTES.md symlink rejected");
-
   const refDir = path.join(dataDir, "skills", "hello-world", "references");
-  await fs.rm(refDir, { recursive: true });
-  const evil = path.join(dataDir, "evil");
-  await fs.mkdir(evil);
-  await fs.symlink(evil, refDir);
-  threw = false;
+  await fs.rm(notesPath);
+  let linked = false;
   try {
-    await writeSkillFile(dataDir, "hello-world", "references/x.md", "nope");
+    await fs.symlink(outside, notesPath);
+    linked = true;
   } catch (err) {
-    threw = err instanceof Error && err.message.includes("symlink");
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "EPERM" && code !== "EACCES" && code !== "ENOTSUP") throw err;
   }
-  assert(threw, "references/ symlink dir rejected");
+  if (linked) {
+    threw = false;
+    try {
+      await viewSkill(dataDir, "hello-world", "NOTES.md");
+    } catch (err) {
+      threw = err instanceof Error && err.message.includes("symlink");
+    }
+    assert(threw, "NOTES.md symlink rejected");
+    assert((await fs.readFile(outside, "utf8")) === "secret\n", "outside.md unchanged");
+
+    await fs.rm(refDir, { recursive: true });
+    const evil = path.join(dataDir, "evil");
+    await fs.mkdir(evil);
+    await fs.symlink(evil, refDir);
+    threw = false;
+    try {
+      await writeSkillFile(dataDir, "hello-world", "references/x.md", "nope");
+    } catch (err) {
+      threw = err instanceof Error && err.message.includes("symlink");
+    }
+    assert(threw, "references/ symlink dir rejected");
+    let leaked = true;
+    try {
+      await fs.access(path.join(evil, "x.md"));
+    } catch {
+      leaked = false;
+    }
+    assert(!leaked, "did not write through symlink dir");
+  }
 
   await deleteSkill(dataDir, "hello-world");
   assert((await listSkills(dataDir)).length === 0, "skill deleted");

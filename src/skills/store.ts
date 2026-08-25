@@ -1,7 +1,11 @@
-import fs from "node:fs/promises";
-import type { Stats } from "node:fs";
+import fs, { type FileHandle } from "node:fs/promises";
+import { constants as fsConstants, type Stats } from "node:fs";
 import path from "node:path";
 import { dataPaths } from "../config.js";
+
+// ponytail: leaf O_NOFOLLOW+fstat; parent-dir TOCTOU needs openat (Node fs has no dirfd open)
+const OPEN_NOFOLLOW =
+  (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const REF_BASENAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}\.md$/;
@@ -68,9 +72,60 @@ async function lstatOrNone(p: string): Promise<Stats | null> {
   }
 }
 
-function assertPlain(st: Stats | null, p: string): void {
+function assertNotLink(st: Stats | null, p: string): void {
   if (st?.isSymbolicLink()) {
     throw new Error(`symlinks are not allowed in skill paths (${p})`);
+  }
+}
+
+function mapFollowErr(err: unknown, p: string): never {
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "ELOOP") {
+    throw new Error(`symlinks are not allowed in skill paths (${p})`);
+  }
+  throw err as Error;
+}
+
+async function assertHandleFile(fh: FileHandle, p: string): Promise<void> {
+  const st = await fh.stat();
+  if (!st.isFile()) {
+    throw new Error(`not a regular file (${p})`);
+  }
+}
+
+async function readPlainFile(file: string): Promise<string> {
+  let fh: FileHandle;
+  try {
+    fh = await fs.open(file, fsConstants.O_RDONLY | OPEN_NOFOLLOW);
+  } catch (err) {
+    throw mapFollowErr(err, file);
+  }
+  try {
+    await assertHandleFile(fh, file);
+    return await fh.readFile("utf8");
+  } finally {
+    await fh.close();
+  }
+}
+
+async function writePlainFile(file: string, content: string): Promise<void> {
+  let fh: FileHandle;
+  try {
+    fh = await fs.open(
+      file,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_TRUNC |
+        OPEN_NOFOLLOW,
+    );
+  } catch (err) {
+    throw mapFollowErr(err, file);
+  }
+  try {
+    await assertHandleFile(fh, file);
+    await fh.writeFile(content, "utf8");
+  } finally {
+    await fh.close();
   }
 }
 
@@ -89,11 +144,21 @@ async function resolveSkillRel(
   }
   const rootSt = await lstatOrNone(root);
   if (!rootSt) throw new Error(`skill ${name} not found`);
-  assertPlain(rootSt, root);
+  assertNotLink(rootSt, root);
+  if (!rootSt.isDirectory()) {
+    throw new Error(`not a directory (${root})`);
+  }
+  const parts = relToRoot.split(path.sep).filter(Boolean);
   let cur = root;
-  for (const part of relToRoot.split(path.sep).filter(Boolean)) {
-    cur = path.join(cur, part);
-    assertPlain(await lstatOrNone(cur), cur);
+  for (let i = 0; i < parts.length; i++) {
+    cur = path.join(cur, parts[i]!);
+    const st = await lstatOrNone(cur);
+    assertNotLink(st, cur);
+    if (!st) continue;
+    const last = i === parts.length - 1;
+    if (last ? !st.isFile() : !st.isDirectory()) {
+      throw new Error(`${last ? "not a regular file" : "not a directory"} (${cur})`);
+    }
   }
   return abs;
 }
@@ -108,21 +173,25 @@ export async function listSkillFiles(
   const notes = path.join(dir, "NOTES.md");
   try {
     const st = await fs.lstat(notes);
-    assertPlain(st, notes);
-    out.push("NOTES.md");
+    assertNotLink(st, notes);
+    if (st.isFile()) out.push("NOTES.md");
   } catch (err) {
     if (!isMissing(err)) throw err;
   }
   const refDir = path.join(dir, "references");
   try {
     const st = await fs.lstat(refDir);
-    assertPlain(st, refDir);
+    assertNotLink(st, refDir);
+    if (!st.isDirectory()) {
+      throw new Error(`not a directory (${refDir})`);
+    }
     const refs = await fs.readdir(refDir);
     for (const f of refs.sort()) {
       if (!isRefBasename(f)) continue;
       const fp = path.join(refDir, f);
-      assertPlain(await fs.lstat(fp), fp);
-      out.push(`references/${f}`);
+      const rst = await fs.lstat(fp);
+      assertNotLink(rst, fp);
+      if (rst.isFile()) out.push(`references/${f}`);
     }
   } catch (err) {
     if (!isMissing(err)) throw err;
@@ -182,7 +251,7 @@ export async function viewSkill(
   filePath?: string,
 ): Promise<{ name: string; path: string; content: string; files?: string[] }> {
   const rel = filePath?.trim() ? assertSkillRelPath(filePath) : "SKILL.md";
-  const content = await fs.readFile(await resolveSkillRel(dataDir, name, rel), "utf8");
+  const content = await readPlainFile(await resolveSkillRel(dataDir, name, rel));
   if (rel !== "SKILL.md") return { name, path: rel, content };
   return {
     name,
@@ -231,11 +300,11 @@ export async function patchSkill(
 ): Promise<{ name: string; path: string }> {
   const rel = assertSkillRelPath(filePath);
   const file = await resolveSkillRel(dataDir, name, rel);
-  const raw = await fs.readFile(file, "utf8");
+  const raw = await readPlainFile(file);
   const count = raw.split(oldText).length - 1;
   if (count === 0) throw new Error("old_text not found");
   if (count > 1) throw new Error("old_text matched multiple times; make it unique");
-  await fs.writeFile(file, raw.replace(oldText, newText), "utf8");
+  await writePlainFile(file, raw.replace(oldText, newText));
   return { name, path: rel };
 }
 
@@ -253,11 +322,19 @@ export async function writeSkillFile(
   const parent = path.dirname(file);
   const parentSt = await lstatOrNone(parent);
   if (!parentSt) {
-    await fs.mkdir(parent, { recursive: true });
+    await fs.mkdir(parent);
   }
-  assertPlain(await lstatOrNone(parent), parent);
-  assertPlain(await lstatOrNone(file), file);
-  await fs.writeFile(file, content, "utf8");
+  const after = await lstatOrNone(parent);
+  assertNotLink(after, parent);
+  if (!after?.isDirectory()) {
+    throw new Error(`not a directory (${parent})`);
+  }
+  const dest = await lstatOrNone(file);
+  assertNotLink(dest, file);
+  if (dest && !dest.isFile()) {
+    throw new Error(`not a regular file (${file})`);
+  }
+  await writePlainFile(file, content);
   return { name, path: rel };
 }
 

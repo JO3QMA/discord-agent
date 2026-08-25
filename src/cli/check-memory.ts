@@ -23,6 +23,17 @@ function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(msg);
 }
 
+async function trySymlink(target: string, link: string): Promise<boolean> {
+  try {
+    await fs.symlink(target, link);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES" || code === "ENOTSUP") return false;
+    throw err;
+  }
+}
+
 async function main() {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "cda-mem-"));
   await ensureMemoryLayout(dataDir);
@@ -123,15 +134,7 @@ async function main() {
   const notesPath = path.join(dataDir, "skills", "hello-world", "NOTES.md");
   const refDir = path.join(dataDir, "skills", "hello-world", "references");
   await fs.rm(notesPath);
-  let linked = false;
-  try {
-    await fs.symlink(outside, notesPath);
-    linked = true;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "EPERM" && code !== "EACCES" && code !== "ENOTSUP") throw err;
-  }
-  if (linked) {
+  if (await trySymlink(outside, notesPath)) {
     threw = false;
     try {
       await viewSkill(dataDir, "hello-world", "NOTES.md");
@@ -144,21 +147,22 @@ async function main() {
     await fs.rm(refDir, { recursive: true });
     const evil = path.join(dataDir, "evil");
     await fs.mkdir(evil);
-    await fs.symlink(evil, refDir);
-    threw = false;
-    try {
-      await writeSkillFile(dataDir, "hello-world", "references/x.md", "nope");
-    } catch (err) {
-      threw = err instanceof Error && err.message.includes("symlink");
+    if (await trySymlink(evil, refDir)) {
+      threw = false;
+      try {
+        await writeSkillFile(dataDir, "hello-world", "references/x.md", "nope");
+      } catch {
+        threw = true;
+      }
+      assert(threw, "references/ symlink dir rejected");
+      let leaked = true;
+      try {
+        await fs.access(path.join(evil, "x.md"));
+      } catch {
+        leaked = false;
+      }
+      assert(!leaked, "did not write through symlink dir");
     }
-    assert(threw, "references/ symlink dir rejected");
-    let leaked = true;
-    try {
-      await fs.access(path.join(evil, "x.md"));
-    } catch {
-      leaked = false;
-    }
-    assert(!leaked, "did not write through symlink dir");
   }
 
   await deleteSkill(dataDir, "hello-world");

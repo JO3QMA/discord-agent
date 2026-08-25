@@ -3,9 +3,8 @@ import { constants as fsConstants, type Stats } from "node:fs";
 import path from "node:path";
 import { dataPaths } from "../config.js";
 
-// ponytail: leaf O_NOFOLLOW+fstat; parent-dir TOCTOU needs openat (Node fs has no dirfd open)
-const OPEN_NOFOLLOW =
-  (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
+// ponytail: Linux /proc/self/fd is openat without a native binding
+const writeTails = new Map<string, Promise<unknown>>();
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const REF_BASENAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}\.md$/;
@@ -86,6 +85,23 @@ function mapFollowErr(err: unknown, p: string): never {
   throw err as Error;
 }
 
+function noFollow(): number {
+  const follow = fsConstants.O_NOFOLLOW;
+  const dir = fsConstants.O_DIRECTORY;
+  if (!follow || !dir) {
+    throw new Error("O_NOFOLLOW and O_DIRECTORY are required for skill file I/O");
+  }
+  return follow | (fsConstants.O_NONBLOCK ?? 0);
+}
+
+async function openNoFollow(p: string, flags: number): Promise<FileHandle> {
+  try {
+    return await fs.open(p, flags | noFollow());
+  } catch (err) {
+    throw mapFollowErr(err, p);
+  }
+}
+
 async function assertHandleFile(fh: FileHandle, p: string): Promise<void> {
   const st = await fh.stat();
   if (!st.isFile()) {
@@ -93,74 +109,116 @@ async function assertHandleFile(fh: FileHandle, p: string): Promise<void> {
   }
 }
 
-async function readPlainFile(file: string): Promise<string> {
-  let fh: FileHandle;
-  try {
-    fh = await fs.open(file, fsConstants.O_RDONLY | OPEN_NOFOLLOW);
-  } catch (err) {
-    throw mapFollowErr(err, file);
+async function openSkillRel(
+  dataDir: string,
+  name: string,
+  rel: string,
+  flags: number,
+  mkdirRefs: boolean,
+): Promise<FileHandle> {
+  if (process.platform !== "linux") {
+    throw new Error("skill file I/O requires Linux (/proc/self/fd)");
   }
+  assertName(name);
+  const parts = assertSkillRelPath(rel).split("/").filter(Boolean);
+  const root = path.resolve(skillDir(dataDir, name));
+  let dir: FileHandle | null = await openNoFollow(
+    root,
+    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY,
+  );
   try {
-    await assertHandleFile(fh, file);
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]!;
+      const last = i === parts.length - 1;
+      const child = `/proc/self/fd/${dir.fd}/${part}`;
+      if (last) {
+        const fh = await openNoFollow(child, flags);
+        await dir.close();
+        dir = null;
+        return fh;
+      }
+      let next: FileHandle;
+      try {
+        next = await openNoFollow(
+          child,
+          fsConstants.O_RDONLY | fsConstants.O_DIRECTORY,
+        );
+      } catch (err) {
+        if (!(mkdirRefs && part === "references" && isMissing(err))) throw err;
+        try {
+          await fs.mkdir(child);
+        } catch (mkdirErr) {
+          if ((mkdirErr as NodeJS.ErrnoException).code !== "EEXIST") {
+            throw mapFollowErr(mkdirErr, child);
+          }
+        }
+        next = await openNoFollow(
+          child,
+          fsConstants.O_RDONLY | fsConstants.O_DIRECTORY,
+        );
+      }
+      await dir.close();
+      dir = next;
+    }
+    throw new Error("empty skill path");
+  } catch (err) {
+    await dir?.close().catch(() => {});
+    throw err;
+  }
+}
+
+async function readSkillRel(
+  dataDir: string,
+  name: string,
+  rel: string,
+): Promise<string> {
+  const fh = await openSkillRel(dataDir, name, rel, fsConstants.O_RDONLY, false);
+  try {
+    await assertHandleFile(fh, rel);
     return await fh.readFile("utf8");
   } finally {
     await fh.close();
   }
 }
 
-async function writePlainFile(file: string, content: string): Promise<void> {
-  let fh: FileHandle;
+async function writeSkillRel(
+  dataDir: string,
+  name: string,
+  rel: string,
+  content: string,
+): Promise<void> {
+  const fh = await openSkillRel(
+    dataDir,
+    name,
+    rel,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC,
+    rel.startsWith("references/"),
+  );
   try {
-    fh = await fs.open(
-      file,
-      fsConstants.O_WRONLY |
-        fsConstants.O_CREAT |
-        fsConstants.O_TRUNC |
-        OPEN_NOFOLLOW,
-    );
-  } catch (err) {
-    throw mapFollowErr(err, file);
-  }
-  try {
-    await assertHandleFile(fh, file);
+    await assertHandleFile(fh, rel);
     await fh.writeFile(content, "utf8");
   } finally {
     await fh.close();
   }
 }
 
-async function resolveSkillRel(
+function withSkillWriteLock<T>(
   dataDir: string,
   name: string,
   rel: string,
-): Promise<string> {
-  assertName(name);
-  const normalized = assertSkillRelPath(rel);
-  const root = path.resolve(skillDir(dataDir, name));
-  const abs = path.resolve(root, normalized);
-  const relToRoot = path.relative(root, abs);
-  if (relToRoot.startsWith("..") || path.isAbsolute(relToRoot)) {
-    throw new Error("path escapes skill directory");
-  }
-  const rootSt = await lstatOrNone(root);
-  if (!rootSt) throw new Error(`skill ${name} not found`);
-  assertNotLink(rootSt, root);
-  if (!rootSt.isDirectory()) {
-    throw new Error(`not a directory (${root})`);
-  }
-  const parts = relToRoot.split(path.sep).filter(Boolean);
-  let cur = root;
-  for (let i = 0; i < parts.length; i++) {
-    cur = path.join(cur, parts[i]!);
-    const st = await lstatOrNone(cur);
-    assertNotLink(st, cur);
-    if (!st) continue;
-    const last = i === parts.length - 1;
-    if (last ? !st.isFile() : !st.isDirectory()) {
-      throw new Error(`${last ? "not a regular file" : "not a directory"} (${cur})`);
-    }
-  }
-  return abs;
+  fn: () => Promise<T>,
+): Promise<T> {
+  const key = `${path.resolve(dataDir)}\0${name}\0${rel}`;
+  const prev = writeTails.get(key) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  writeTails.set(
+    key,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return run;
 }
 
 export async function listSkillFiles(
@@ -169,6 +227,12 @@ export async function listSkillFiles(
 ): Promise<string[]> {
   assertName(name);
   const dir = skillDir(dataDir, name);
+  const skillMd = path.join(dir, "SKILL.md");
+  const sst = await lstatOrNone(skillMd);
+  assertNotLink(sst, skillMd);
+  if (!sst?.isFile()) {
+    throw new Error(`not a regular file (${skillMd})`);
+  }
   const out: string[] = ["SKILL.md"];
   const notes = path.join(dir, "NOTES.md");
   try {
@@ -251,7 +315,7 @@ export async function viewSkill(
   filePath?: string,
 ): Promise<{ name: string; path: string; content: string; files?: string[] }> {
   const rel = filePath?.trim() ? assertSkillRelPath(filePath) : "SKILL.md";
-  const content = await readPlainFile(await resolveSkillRel(dataDir, name, rel));
+  const content = await readSkillRel(dataDir, name, rel);
   if (rel !== "SKILL.md") return { name, path: rel, content };
   return {
     name,
@@ -299,13 +363,14 @@ export async function patchSkill(
   filePath = "SKILL.md",
 ): Promise<{ name: string; path: string }> {
   const rel = assertSkillRelPath(filePath);
-  const file = await resolveSkillRel(dataDir, name, rel);
-  const raw = await readPlainFile(file);
-  const count = raw.split(oldText).length - 1;
-  if (count === 0) throw new Error("old_text not found");
-  if (count > 1) throw new Error("old_text matched multiple times; make it unique");
-  await writePlainFile(file, raw.replace(oldText, newText));
-  return { name, path: rel };
+  return withSkillWriteLock(dataDir, name, rel, async () => {
+    const raw = await readSkillRel(dataDir, name, rel);
+    const count = raw.split(oldText).length - 1;
+    if (count === 0) throw new Error("old_text not found");
+    if (count > 1) throw new Error("old_text matched multiple times; make it unique");
+    await writeSkillRel(dataDir, name, rel, raw.replace(oldText, newText));
+    return { name, path: rel };
+  });
 }
 
 export async function writeSkillFile(
@@ -318,24 +383,10 @@ export async function writeSkillFile(
   if (rel === "SKILL.md") {
     throw new Error("use skill_create or skill_patch for SKILL.md");
   }
-  const file = await resolveSkillRel(dataDir, name, rel);
-  const parent = path.dirname(file);
-  const parentSt = await lstatOrNone(parent);
-  if (!parentSt) {
-    await fs.mkdir(parent);
-  }
-  const after = await lstatOrNone(parent);
-  assertNotLink(after, parent);
-  if (!after?.isDirectory()) {
-    throw new Error(`not a directory (${parent})`);
-  }
-  const dest = await lstatOrNone(file);
-  assertNotLink(dest, file);
-  if (dest && !dest.isFile()) {
-    throw new Error(`not a regular file (${file})`);
-  }
-  await writePlainFile(file, content);
-  return { name, path: rel };
+  return withSkillWriteLock(dataDir, name, rel, async () => {
+    await writeSkillRel(dataDir, name, rel, content);
+    return { name, path: rel };
+  });
 }
 
 export async function deleteSkill(

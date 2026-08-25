@@ -12,7 +12,9 @@ import {
   loadSessionStore,
   saveSessionStore,
   toModelSelection,
+  buildSystemPreamble,
 } from "../agent/session.js";
+import { LEARNING_STORE_RULES } from "../agent/learning-rules.js";
 import { parseModelEffort } from "../config.js";
 import {
   conversationKey,
@@ -97,6 +99,14 @@ async function main() {
     if (!(err instanceof Error) || !err.message.includes("CURSOR_MODEL_EFFORT")) {
       throw err;
     }
+  }
+
+  const preamble = await buildSystemPreamble(dir, "alice");
+  if (!preamble.includes(LEARNING_STORE_RULES)) {
+    throw new Error("session preamble must include fact vs procedure store split");
+  }
+  if (preamble.includes("Respect character limits; consolidate when full.")) {
+    throw new Error("old overflow-to-skills-adjacent consolidate line should be gone");
   }
 
   console.log("check:session OK");

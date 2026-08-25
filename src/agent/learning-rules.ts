@@ -12,7 +12,7 @@ export const MEMORY_TOOL_DESCRIPTION =
   "Curated persistent memory (Hermes-style). Targets: memory (notes) or user (profile). Actions: add|replace|remove|list. At the char limit, consolidate with replace/remove then retry — do not move overflow into skills.";
 
 export const SKILL_CREATE_DESCRIPTION =
-  "Create a procedural skill (agentskills.io: description ≤60 chars, name [a-z0-9_-] ≤64, + body). Body must be a reusable workflow (when to use, steps, pitfalls). Not for ledgers, shopping lists, event logs, inventories, or memory overflow.";
+  "Create a procedural skill (agentskills.io: description ≤60 chars, name [a-z0-9][a-z0-9_-]{0,63}, + body). Body must be a reusable workflow (when to use, steps, pitfalls). Not for ledgers, shopping lists, event logs, inventories, or memory overflow.";
 
 export const SKILL_PATCH_DESCRIPTION =
   "Surgical replace inside an existing SKILL.md (old_text must match once). Patch procedure steps only. Do not append shopping items, event-log rows, inventories, or other factual overflow.";

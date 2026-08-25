@@ -101,6 +101,32 @@ async function main() {
   }
   assert(threw, "skill_write_file cannot clobber SKILL.md");
 
+  const outside = path.join(dataDir, "outside.md");
+  await fs.writeFile(outside, "secret\n");
+  const notesPath = path.join(dataDir, "skills", "hello-world", "NOTES.md");
+  await fs.rm(notesPath);
+  await fs.symlink(outside, notesPath);
+  threw = false;
+  try {
+    await viewSkill(dataDir, "hello-world", "NOTES.md");
+  } catch (err) {
+    threw = err instanceof Error && err.message.includes("symlink");
+  }
+  assert(threw, "NOTES.md symlink rejected");
+
+  const refDir = path.join(dataDir, "skills", "hello-world", "references");
+  await fs.rm(refDir, { recursive: true });
+  const evil = path.join(dataDir, "evil");
+  await fs.mkdir(evil);
+  await fs.symlink(evil, refDir);
+  threw = false;
+  try {
+    await writeSkillFile(dataDir, "hello-world", "references/x.md", "nope");
+  } catch (err) {
+    threw = err instanceof Error && err.message.includes("symlink");
+  }
+  assert(threw, "references/ symlink dir rejected");
+
   await deleteSkill(dataDir, "hello-world");
   assert((await listSkills(dataDir)).length === 0, "skill deleted");
 

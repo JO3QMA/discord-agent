@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
+import type { Stats } from "node:fs";
 import path from "node:path";
 import { dataPaths } from "../config.js";
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-const SKILL_REL_RE =
-  /^(SKILL\.md|NOTES\.md|references\/[a-z0-9][a-z0-9_-]{0,63}\.md)$/;
+const REF_BASENAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}\.md$/;
 
 export type SkillMeta = {
   name: string;
@@ -34,9 +34,24 @@ function assertSafeName(name: string): string {
   return n;
 }
 
+function isRefBasename(file: string): boolean {
+  return REF_BASENAME_RE.test(file);
+}
+
+function isMissing(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException).code === "ENOENT";
+}
+
 export function assertSkillRelPath(rel: string): string {
   const normalized = rel.trim().replace(/\\/g, "/").replace(/^\/+/, "");
-  if (!SKILL_REL_RE.test(normalized)) {
+  if (
+    normalized !== "SKILL.md" &&
+    normalized !== "NOTES.md" &&
+    !(
+      normalized.startsWith("references/") &&
+      isRefBasename(normalized.slice("references/".length))
+    )
+  ) {
     throw new Error(
       `invalid skill path ${JSON.stringify(rel)}; use SKILL.md, NOTES.md, or references/<name>.md`,
     );
@@ -44,7 +59,26 @@ export function assertSkillRelPath(rel: string): string {
   return normalized;
 }
 
-function resolveSkillRel(dataDir: string, name: string, rel: string): string {
+async function lstatOrNone(p: string): Promise<Stats | null> {
+  try {
+    return await fs.lstat(p);
+  } catch (err) {
+    if (isMissing(err)) return null;
+    throw err;
+  }
+}
+
+function assertPlain(st: Stats | null, p: string): void {
+  if (st?.isSymbolicLink()) {
+    throw new Error(`symlinks are not allowed in skill paths (${p})`);
+  }
+}
+
+async function resolveSkillRel(
+  dataDir: string,
+  name: string,
+  rel: string,
+): Promise<string> {
   assertName(name);
   const normalized = assertSkillRelPath(rel);
   const root = path.resolve(skillDir(dataDir, name));
@@ -52,6 +86,14 @@ function resolveSkillRel(dataDir: string, name: string, rel: string): string {
   const relToRoot = path.relative(root, abs);
   if (relToRoot.startsWith("..") || path.isAbsolute(relToRoot)) {
     throw new Error("path escapes skill directory");
+  }
+  const rootSt = await lstatOrNone(root);
+  if (!rootSt) throw new Error(`skill ${name} not found`);
+  assertPlain(rootSt, root);
+  let cur = root;
+  for (const part of relToRoot.split(path.sep).filter(Boolean)) {
+    cur = path.join(cur, part);
+    assertPlain(await lstatOrNone(cur), cur);
   }
   return abs;
 }
@@ -63,21 +105,27 @@ export async function listSkillFiles(
   assertName(name);
   const dir = skillDir(dataDir, name);
   const out: string[] = ["SKILL.md"];
+  const notes = path.join(dir, "NOTES.md");
   try {
-    await fs.access(path.join(dir, "NOTES.md"));
+    const st = await fs.lstat(notes);
+    assertPlain(st, notes);
     out.push("NOTES.md");
-  } catch {
-    // optional
+  } catch (err) {
+    if (!isMissing(err)) throw err;
   }
+  const refDir = path.join(dir, "references");
   try {
-    const refs = await fs.readdir(path.join(dir, "references"));
+    const st = await fs.lstat(refDir);
+    assertPlain(st, refDir);
+    const refs = await fs.readdir(refDir);
     for (const f of refs.sort()) {
-      if (/^[a-z0-9][a-z0-9_-]{0,63}\.md$/.test(f)) {
-        out.push(`references/${f}`);
-      }
+      if (!isRefBasename(f)) continue;
+      const fp = path.join(refDir, f);
+      assertPlain(await fs.lstat(fp), fp);
+      out.push(`references/${f}`);
     }
-  } catch {
-    // optional
+  } catch (err) {
+    if (!isMissing(err)) throw err;
   }
   return out;
 }
@@ -134,7 +182,7 @@ export async function viewSkill(
   filePath?: string,
 ): Promise<{ name: string; path: string; content: string; files?: string[] }> {
   const rel = filePath?.trim() ? assertSkillRelPath(filePath) : "SKILL.md";
-  const content = await fs.readFile(resolveSkillRel(dataDir, name, rel), "utf8");
+  const content = await fs.readFile(await resolveSkillRel(dataDir, name, rel), "utf8");
   if (rel !== "SKILL.md") return { name, path: rel, content };
   return {
     name,
@@ -182,7 +230,7 @@ export async function patchSkill(
   filePath = "SKILL.md",
 ): Promise<{ name: string; path: string }> {
   const rel = assertSkillRelPath(filePath);
-  const file = resolveSkillRel(dataDir, name, rel);
+  const file = await resolveSkillRel(dataDir, name, rel);
   const raw = await fs.readFile(file, "utf8");
   const count = raw.split(oldText).length - 1;
   if (count === 0) throw new Error("old_text not found");
@@ -201,8 +249,14 @@ export async function writeSkillFile(
   if (rel === "SKILL.md") {
     throw new Error("use skill_create or skill_patch for SKILL.md");
   }
-  const file = resolveSkillRel(dataDir, name, rel);
-  await fs.mkdir(path.dirname(file), { recursive: true });
+  const file = await resolveSkillRel(dataDir, name, rel);
+  const parent = path.dirname(file);
+  const parentSt = await lstatOrNone(parent);
+  if (!parentSt) {
+    await fs.mkdir(parent, { recursive: true });
+  }
+  assertPlain(await lstatOrNone(parent), parent);
+  assertPlain(await lstatOrNone(file), file);
   await fs.writeFile(file, content, "utf8");
   return { name, path: rel };
 }

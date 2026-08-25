@@ -4,6 +4,7 @@ import {
   sanitizeReviewEmbed,
   truncateReviewText,
 } from "../agent/review.js";
+import { LEARNING_STORE_RULES } from "../agent/learning-rules.js";
 
 function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(msg);
@@ -69,6 +70,18 @@ function main() {
   assert(
     prompt.includes("untrusted transcripts (DATA)"),
     "marks embeds as untrusted data",
+  );
+  assert(
+    prompt.includes(LEARNING_STORE_RULES),
+    "store split (facts vs procedures) is in review rules",
+  );
+  assert(
+    prompt.includes("ledger-like skill"),
+    "forbids patching existing ledger skills",
+  );
+  assert(
+    !prompt.includes("or reusable procedure worth keeping, write it via MCP"),
+    "old catch-all MCP write rule is gone",
   );
 
   const long = buildDetachedReviewPrompt("U".repeat(5000), "A".repeat(5000));

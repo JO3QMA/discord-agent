@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setActiveOperator } from "../operator/active.js";
+import {
+  MEMORY_TOOL_DESCRIPTION,
+  SKILL_CREATE_DESCRIPTION,
+  SKILL_PATCH_DESCRIPTION,
+} from "../agent/learning-rules.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -39,6 +44,16 @@ async function main() {
   ];
   for (const n of expected) {
     if (!names.includes(n)) throw new Error(`missing tool ${n}: ${names.join(",")}`);
+  }
+  const byName = Object.fromEntries(tools.tools.map((t) => [t.name, t.description ?? ""]));
+  if (byName.memory !== MEMORY_TOOL_DESCRIPTION) {
+    throw new Error("memory tool description drifted from learning-rules");
+  }
+  if (byName.skill_create !== SKILL_CREATE_DESCRIPTION) {
+    throw new Error("skill_create description drifted from learning-rules");
+  }
+  if (byName.skill_patch !== SKILL_PATCH_DESCRIPTION) {
+    throw new Error("skill_patch description drifted from learning-rules");
   }
   const add = await client.callTool({
     name: "memory",

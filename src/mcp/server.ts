@@ -27,6 +27,11 @@ import {
 import { stageWrite } from "../approval/pending.js";
 import { loadSettings } from "../gateway/settings.js";
 import { getActiveOperator } from "../operator/active.js";
+import {
+  MEMORY_TOOL_DESCRIPTION,
+  SKILL_CREATE_DESCRIPTION,
+  SKILL_PATCH_DESCRIPTION,
+} from "../agent/learning-rules.js";
 
 const dataDir = process.env.DATA_DIR?.trim() || "./data";
 
@@ -85,7 +90,7 @@ async function main() {
 
   server.tool(
     "memory",
-    "Curated persistent memory (Hermes-style). Targets: memory (notes) or user (profile). Actions: add|replace|remove|list.",
+    MEMORY_TOOL_DESCRIPTION,
     {
       action: z.enum(["add", "replace", "remove", "list"]),
       target: z.enum(["memory", "user"]),
@@ -155,7 +160,7 @@ async function main() {
 
   server.tool(
     "skill_create",
-    "Create a new skill (agentskills.io minimal: frontmatter name+description ≤60 chars + body).",
+    SKILL_CREATE_DESCRIPTION,
     {
       name: z.string(),
       description: z.string(),
@@ -169,7 +174,7 @@ async function main() {
 
   server.tool(
     "skill_patch",
-    "Surgical replace inside an existing SKILL.md (old_text must match once).",
+    SKILL_PATCH_DESCRIPTION,
     {
       name: z.string(),
       old_text: z.string(),

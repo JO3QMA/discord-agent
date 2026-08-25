@@ -19,6 +19,7 @@ import { buildSoulBlock } from "../soul/store.js";
 import { loadSettings } from "../gateway/settings.js";
 import { setActiveOperator } from "../operator/active.js";
 import { operatorKey } from "../discord/conversation-key.js";
+import { LEARNING_STORE_RULES } from "./learning-rules.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -195,8 +196,7 @@ export async function buildSystemPreamble(
     "You are running via a Discord gateway on top of the Cursor agent runtime.",
     "Use the memory-skills MCP tools to persist durable facts and procedural skills.",
     "Also available: session_search, cronjob tools when exposed.",
-    "Memory targets: `memory` (shared environment/lessons) and `user` (this Operator's profile).",
-    "Respect character limits; consolidate when full.",
+    LEARNING_STORE_RULES,
     "This Discord channel/thread shares one Cursor session among allowed Operators; personal profile is Operator-scoped.",
     "",
     block,

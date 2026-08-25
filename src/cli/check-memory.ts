@@ -16,6 +16,7 @@ import {
   listSkills,
   patchSkill,
   viewSkill,
+  writeSkillFile,
 } from "../skills/store.js";
 
 function assert(cond: unknown, msg: string): asserts cond {
@@ -63,6 +64,42 @@ async function main() {
   await patchSkill(dataDir, "hello-world", "PONG", "PING");
   const viewed = await viewSkill(dataDir, "hello-world");
   assert(viewed.content.includes("PING"), "patch applied");
+  assert(viewed.files?.includes("SKILL.md"), "view lists SKILL.md");
+
+  await writeSkillFile(dataDir, "hello-world", "NOTES.md", "# list\n- milk\n");
+  const notes = await viewSkill(dataDir, "hello-world", "NOTES.md");
+  assert(notes.path === "NOTES.md" && notes.content.includes("milk"), "NOTES.md roundtrip");
+  const indexed = await viewSkill(dataDir, "hello-world");
+  assert(indexed.files?.includes("NOTES.md"), "SKILL.md view lists NOTES.md");
+
+  await writeSkillFile(
+    dataDir,
+    "hello-world",
+    "references/sites.md",
+    "# sites\npark\n",
+  );
+  const ref = await viewSkill(dataDir, "hello-world", "references/sites.md");
+  assert(ref.content.includes("park"), "references/ roundtrip");
+
+  await patchSkill(dataDir, "hello-world", "milk", "oat milk", "NOTES.md");
+  const patchedNotes = await viewSkill(dataDir, "hello-world", "NOTES.md");
+  assert(patchedNotes.content.includes("oat milk"), "patch NOTES.md");
+
+  let threw = false;
+  try {
+    await viewSkill(dataDir, "hello-world", "../MEMORY.md");
+  } catch {
+    threw = true;
+  }
+  assert(threw, "path traversal rejected");
+
+  threw = false;
+  try {
+    await writeSkillFile(dataDir, "hello-world", "SKILL.md", "nope");
+  } catch {
+    threw = true;
+  }
+  assert(threw, "skill_write_file cannot clobber SKILL.md");
 
   await deleteSkill(dataDir, "hello-world");
   assert((await listSkills(dataDir)).length === 0, "skill deleted");

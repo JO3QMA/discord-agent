@@ -76,8 +76,16 @@ function main() {
     "store split (facts vs procedures) is in review rules",
   );
   assert(
-    prompt.includes("ledger-like skill"),
-    "forbids patching existing ledger skills",
+    prompt.includes("skill_write_file"),
+    "names skill_write_file as the ledger write tool",
+  );
+  assert(
+    prompt.includes('path="NOTES.md"'),
+    "names NOTES.md path for ledgers",
+  );
+  assert(
+    !prompt.includes("ledger-like skill"),
+    "old ledger-skill forbid-only wording is gone",
   );
   assert(
     !prompt.includes("or reusable procedure worth keeping, write it via MCP"),

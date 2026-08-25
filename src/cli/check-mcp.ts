@@ -9,6 +9,8 @@ import {
   MEMORY_TOOL_DESCRIPTION,
   SKILL_CREATE_DESCRIPTION,
   SKILL_PATCH_DESCRIPTION,
+  SKILL_VIEW_DESCRIPTION,
+  SKILL_WRITE_FILE_DESCRIPTION,
 } from "../agent/learning-rules.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -40,6 +42,7 @@ async function main() {
     "skill_delete",
     "skill_patch",
     "skill_view",
+    "skill_write_file",
     "skills_list",
   ];
   for (const n of expected) {
@@ -54,6 +57,12 @@ async function main() {
   }
   if (byName.skill_patch !== SKILL_PATCH_DESCRIPTION) {
     throw new Error("skill_patch description drifted from learning-rules");
+  }
+  if (byName.skill_view !== SKILL_VIEW_DESCRIPTION) {
+    throw new Error("skill_view description drifted from learning-rules");
+  }
+  if (byName.skill_write_file !== SKILL_WRITE_FILE_DESCRIPTION) {
+    throw new Error("skill_write_file description drifted from learning-rules");
   }
   const add = await client.callTool({
     name: "memory",

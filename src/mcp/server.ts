@@ -16,6 +16,7 @@ import {
   listSkills,
   patchSkill,
   viewSkill,
+  writeSkillFile,
 } from "../skills/store.js";
 import { searchMessages, openSearchDb } from "../search/fts.js";
 import {
@@ -31,6 +32,8 @@ import {
   MEMORY_TOOL_DESCRIPTION,
   SKILL_CREATE_DESCRIPTION,
   SKILL_PATCH_DESCRIPTION,
+  SKILL_VIEW_DESCRIPTION,
+  SKILL_WRITE_FILE_DESCRIPTION,
 } from "../agent/learning-rules.js";
 
 const dataDir = process.env.DATA_DIR?.trim() || "./data";
@@ -147,11 +150,11 @@ async function main() {
 
   server.tool(
     "skill_view",
-    "Read a skill's SKILL.md by name.",
-    { name: z.string() },
-    async ({ name }) => {
+    SKILL_VIEW_DESCRIPTION,
+    { name: z.string(), path: z.string().optional() },
+    async ({ name, path: filePath }) => {
       try {
-        return json(await viewSkill(dataDir, name));
+        return json(await viewSkill(dataDir, name, filePath));
       } catch (err) {
         return json({ success: false, error: String(err) });
       }
@@ -179,13 +182,31 @@ async function main() {
       name: z.string(),
       old_text: z.string(),
       new_text: z.string(),
+      path: z.string().optional(),
     },
-    async ({ name, old_text, new_text }) =>
+    async ({ name, old_text, new_text, path: filePath }) =>
       withSkillApproval(
         "patch",
-        `patch ${name}`,
-        { name, old_text, new_text },
-        () => patchSkill(dataDir, name, old_text, new_text),
+        `patch ${name}${filePath ? ` ${filePath}` : ""}`,
+        { name, old_text, new_text, path: filePath },
+        () => patchSkill(dataDir, name, old_text, new_text, filePath || undefined),
+      ),
+  );
+
+  server.tool(
+    "skill_write_file",
+    SKILL_WRITE_FILE_DESCRIPTION,
+    {
+      name: z.string(),
+      path: z.string(),
+      content: z.string(),
+    },
+    async ({ name, path: filePath, content }) =>
+      withSkillApproval(
+        "write_file",
+        `write ${name} ${filePath}`,
+        { name, path: filePath, content },
+        () => writeSkillFile(dataDir, name, filePath, content),
       ),
   );
 

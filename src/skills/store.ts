@@ -3,6 +3,8 @@ import path from "node:path";
 import { dataPaths } from "../config.js";
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const SKILL_REL_RE =
+  /^(SKILL\.md|NOTES\.md|references\/[a-z0-9][a-z0-9_-]{0,63}\.md)$/;
 
 export type SkillMeta = {
   name: string;
@@ -30,6 +32,54 @@ function assertSafeName(name: string): string {
   const n = name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-");
   if (!n || n.length > 64) throw new Error("invalid skill name");
   return n;
+}
+
+export function assertSkillRelPath(rel: string): string {
+  const normalized = rel.trim().replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!SKILL_REL_RE.test(normalized)) {
+    throw new Error(
+      `invalid skill path ${JSON.stringify(rel)}; use SKILL.md, NOTES.md, or references/<name>.md`,
+    );
+  }
+  return normalized;
+}
+
+function resolveSkillRel(dataDir: string, name: string, rel: string): string {
+  assertName(name);
+  const normalized = assertSkillRelPath(rel);
+  const root = path.resolve(skillDir(dataDir, name));
+  const abs = path.resolve(root, normalized);
+  const relToRoot = path.relative(root, abs);
+  if (relToRoot.startsWith("..") || path.isAbsolute(relToRoot)) {
+    throw new Error("path escapes skill directory");
+  }
+  return abs;
+}
+
+export async function listSkillFiles(
+  dataDir: string,
+  name: string,
+): Promise<string[]> {
+  assertName(name);
+  const dir = skillDir(dataDir, name);
+  const out: string[] = ["SKILL.md"];
+  try {
+    await fs.access(path.join(dir, "NOTES.md"));
+    out.push("NOTES.md");
+  } catch {
+    // optional
+  }
+  try {
+    const refs = await fs.readdir(path.join(dir, "references"));
+    for (const f of refs.sort()) {
+      if (/^[a-z0-9][a-z0-9_-]{0,63}\.md$/.test(f)) {
+        out.push(`references/${f}`);
+      }
+    }
+  } catch {
+    // optional
+  }
+  return out;
 }
 
 function parseFrontmatter(
@@ -81,10 +131,17 @@ export async function listSkills(dataDir: string): Promise<SkillMeta[]> {
 export async function viewSkill(
   dataDir: string,
   name: string,
-): Promise<{ name: string; content: string }> {
-  assertName(name);
-  const content = await fs.readFile(skillFile(dataDir, name), "utf8");
-  return { name, content };
+  filePath?: string,
+): Promise<{ name: string; path: string; content: string; files?: string[] }> {
+  const rel = filePath?.trim() ? assertSkillRelPath(filePath) : "SKILL.md";
+  const content = await fs.readFile(resolveSkillRel(dataDir, name, rel), "utf8");
+  if (rel !== "SKILL.md") return { name, path: rel, content };
+  return {
+    name,
+    path: rel,
+    content,
+    files: await listSkillFiles(dataDir, name),
+  };
 }
 
 export async function createSkill(
@@ -122,15 +179,32 @@ export async function patchSkill(
   name: string,
   oldText: string,
   newText: string,
+  filePath = "SKILL.md",
 ): Promise<{ name: string; path: string }> {
-  assertName(name);
-  const file = skillFile(dataDir, name);
+  const rel = assertSkillRelPath(filePath);
+  const file = resolveSkillRel(dataDir, name, rel);
   const raw = await fs.readFile(file, "utf8");
   const count = raw.split(oldText).length - 1;
   if (count === 0) throw new Error("old_text not found");
   if (count > 1) throw new Error("old_text matched multiple times; make it unique");
   await fs.writeFile(file, raw.replace(oldText, newText), "utf8");
-  return { name, path: file };
+  return { name, path: rel };
+}
+
+export async function writeSkillFile(
+  dataDir: string,
+  name: string,
+  filePath: string,
+  content: string,
+): Promise<{ name: string; path: string }> {
+  const rel = assertSkillRelPath(filePath);
+  if (rel === "SKILL.md") {
+    throw new Error("use skill_create or skill_patch for SKILL.md");
+  }
+  const file = resolveSkillRel(dataDir, name, rel);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, content, "utf8");
+  return { name, path: rel };
 }
 
 export async function deleteSkill(

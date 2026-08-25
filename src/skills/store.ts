@@ -109,34 +109,28 @@ async function assertHandleFile(fh: FileHandle, p: string): Promise<void> {
   }
 }
 
-async function openSkillRel(
+async function withSkillParent<T>(
   dataDir: string,
   name: string,
   rel: string,
-  flags: number,
   mkdirRefs: boolean,
-): Promise<FileHandle> {
+  fn: (dir: FileHandle, part: string) => Promise<T>,
+): Promise<T> {
   if (process.platform !== "linux") {
     throw new Error("skill file I/O requires Linux (/proc/self/fd)");
   }
   assertName(name);
   const parts = assertSkillRelPath(rel).split("/").filter(Boolean);
+  if (!parts.length) throw new Error("empty skill path");
   const root = path.resolve(skillDir(dataDir, name));
   let dir: FileHandle | null = await openNoFollow(
     root,
     fsConstants.O_RDONLY | fsConstants.O_DIRECTORY,
   );
   try {
-    for (let i = 0; i < parts.length; i++) {
+    for (let i = 0; i < parts.length - 1; i++) {
       const part = parts[i]!;
-      const last = i === parts.length - 1;
       const child = `/proc/self/fd/${dir.fd}/${part}`;
-      if (last) {
-        const fh = await openNoFollow(child, flags);
-        await dir.close();
-        dir = null;
-        return fh;
-      }
       let next: FileHandle;
       try {
         next = await openNoFollow(
@@ -157,13 +151,18 @@ async function openSkillRel(
           fsConstants.O_RDONLY | fsConstants.O_DIRECTORY,
         );
       }
-      await dir.close();
+      try {
+        await dir.close();
+      } catch (closeErr) {
+        await next.close().catch(() => {});
+        dir = null;
+        throw closeErr;
+      }
       dir = next;
     }
-    throw new Error("empty skill path");
-  } catch (err) {
+    return await fn(dir, parts[parts.length - 1]!);
+  } finally {
     await dir?.close().catch(() => {});
-    throw err;
   }
 }
 
@@ -172,13 +171,18 @@ async function readSkillRel(
   name: string,
   rel: string,
 ): Promise<string> {
-  const fh = await openSkillRel(dataDir, name, rel, fsConstants.O_RDONLY, false);
-  try {
-    await assertHandleFile(fh, rel);
-    return await fh.readFile("utf8");
-  } finally {
-    await fh.close();
-  }
+  return withSkillParent(dataDir, name, rel, false, async (dir, part) => {
+    const fh = await openNoFollow(
+      `/proc/self/fd/${dir.fd}/${part}`,
+      fsConstants.O_RDONLY,
+    );
+    try {
+      await assertHandleFile(fh, rel);
+      return await fh.readFile("utf8");
+    } finally {
+      await fh.close();
+    }
+  });
 }
 
 async function writeSkillRel(
@@ -187,19 +191,37 @@ async function writeSkillRel(
   rel: string,
   content: string,
 ): Promise<void> {
-  const fh = await openSkillRel(
+  await withSkillParent(
     dataDir,
     name,
     rel,
-    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC,
     rel.startsWith("references/"),
+    async (dir, part) => {
+      const tmpName = `.${part}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+      const tmpPath = `/proc/self/fd/${dir.fd}/${tmpName}`;
+      const destPath = `/proc/self/fd/${dir.fd}/${part}`;
+      const fh = await openNoFollow(
+        tmpPath,
+        fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL,
+      );
+      try {
+        await assertHandleFile(fh, tmpPath);
+        await fh.writeFile(content, "utf8");
+        await fh.sync();
+      } catch (err) {
+        await fh.close().catch(() => {});
+        await fs.unlink(tmpPath).catch(() => {});
+        throw err;
+      }
+      await fh.close();
+      try {
+        await fs.rename(tmpPath, destPath);
+      } catch (err) {
+        await fs.unlink(tmpPath).catch(() => {});
+        throw err;
+      }
+    },
   );
-  try {
-    await assertHandleFile(fh, rel);
-    await fh.writeFile(content, "utf8");
-  } finally {
-    await fh.close();
-  }
 }
 
 function withSkillWriteLock<T>(
@@ -208,6 +230,7 @@ function withSkillWriteLock<T>(
   rel: string,
   fn: () => Promise<T>,
 ): Promise<T> {
+  // ponytail: in-process write lock; flock if two processes share DATA_DIR
   const key = `${path.resolve(dataDir)}\0${name}\0${rel}`;
   const prev = writeTails.get(key) ?? Promise.resolve();
   const run = prev.then(fn, fn);
@@ -317,12 +340,13 @@ export async function viewSkill(
   const rel = filePath?.trim() ? assertSkillRelPath(filePath) : "SKILL.md";
   const content = await readSkillRel(dataDir, name, rel);
   if (rel !== "SKILL.md") return { name, path: rel, content };
-  return {
-    name,
-    path: rel,
-    content,
-    files: await listSkillFiles(dataDir, name),
-  };
+  let files: string[] | undefined;
+  try {
+    files = await listSkillFiles(dataDir, name);
+  } catch {
+    // content already read; listing is best-effort
+  }
+  return { name, path: rel, content, files };
 }
 
 export async function createSkill(

@@ -10,6 +10,7 @@ import {
   memoryList,
 } from "../memory/store.js";
 import {
+  assertSkillRelPath,
   createSkill,
   deleteSkill,
   ensureSkillsLayout,
@@ -184,13 +185,19 @@ async function main() {
       new_text: z.string(),
       path: z.string().optional(),
     },
-    async ({ name, old_text, new_text, path: filePath }) =>
-      withSkillApproval(
-        "patch",
-        `patch ${name}${filePath ? ` ${filePath}` : ""}`,
-        { name, old_text, new_text, path: filePath },
-        () => patchSkill(dataDir, name, old_text, new_text, filePath || undefined),
-      ),
+    async ({ name, old_text, new_text, path: filePath }) => {
+      try {
+        const rel = filePath?.trim() ? assertSkillRelPath(filePath) : undefined;
+        return await withSkillApproval(
+          "patch",
+          `patch ${name}${rel ? ` ${rel}` : ""}`,
+          { name, old_text, new_text, path: rel },
+          () => patchSkill(dataDir, name, old_text, new_text, rel),
+        );
+      } catch (err) {
+        return json({ success: false, error: String(err) });
+      }
+    },
   );
 
   server.tool(
@@ -201,13 +208,25 @@ async function main() {
       path: z.string(),
       content: z.string(),
     },
-    async ({ name, path: filePath, content }) =>
-      withSkillApproval(
-        "write_file",
-        `write ${name} ${filePath}`,
-        { name, path: filePath, content },
-        () => writeSkillFile(dataDir, name, filePath, content),
-      ),
+    async ({ name, path: filePath, content }) => {
+      try {
+        const rel = assertSkillRelPath(filePath);
+        if (rel === "SKILL.md") {
+          return json({
+            success: false,
+            error: "use skill_create or skill_patch for SKILL.md",
+          });
+        }
+        return await withSkillApproval(
+          "write_file",
+          `write ${name} ${rel}`,
+          { name, path: rel, content },
+          () => writeSkillFile(dataDir, name, rel, content),
+        );
+      } catch (err) {
+        return json({ success: false, error: String(err) });
+      }
+    },
   );
 
   server.tool(

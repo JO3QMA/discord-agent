@@ -91,6 +91,8 @@ async function main() {
   );
   const ref = await viewSkill(dataDir, "hello-world", "references/sites.md");
   assert(ref.content.includes("park"), "references/ roundtrip");
+  const refIndexed = await viewSkill(dataDir, "hello-world");
+  assert(refIndexed.files?.includes("references/sites.md"), "view lists references/");
 
   await patchSkill(dataDir, "hello-world", "milk", "oat milk", "NOTES.md");
   const patchedNotes = await viewSkill(dataDir, "hello-world", "NOTES.md");

@@ -13,6 +13,7 @@ import {
   createSkill,
   deleteSkill,
   patchSkill,
+  writeSkillFile,
 } from "../skills/store.js";
 
 export async function applyPending(
@@ -110,6 +111,16 @@ async function applyPayload(dataDir: string, item: PendingWrite): Promise<void> 
         String(p.name),
         String(p.old_text),
         String(p.new_text),
+        typeof p.path === "string" && p.path ? p.path : undefined,
+      );
+      return;
+    }
+    if (item.action === "write_file") {
+      await writeSkillFile(
+        dataDir,
+        String(p.name),
+        String(p.path),
+        String(p.content ?? ""),
       );
       return;
     }

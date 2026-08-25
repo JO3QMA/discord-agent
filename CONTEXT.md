@@ -53,8 +53,8 @@ Operator が選ぶ声・口調の設定（`SOUL.md` / personality）。Operator 
 _Avoid_: USER（学習対象のプロファイル）, 第4の記憶柱, 会話ごとの人格（個人付帯でない場合）
 
 **Skill**:
-学習ループが持つ、再利用可能な手順（`SKILL.md`）。agentskills.io 互換の形を取る。MEMORY / USER が満杯でも、事実や台帳の溢れ先にはしない。
-_Avoid_: prompt template, custom command, plugin, 買い物リスト・済イベント・在庫ダンプなどの台帳, MEMORY/USER 溢れの退避先
+学習ループが持つ、再利用可能な手順（`SKILL.md`）と、そのトピックのオンデマンド事実（同じディレクトリの `NOTES.md` / `references/`）。agentskills.io 互換。MEMORY / USER が満杯でも、台帳をそこに圧縮して逃がさない。読書きは memory-skills MCP の `skill_view` / `skill_write_file` / `skill_patch(path=…)`。
+_Avoid_: prompt template, custom command, plugin, SKILL.md 本文への台帳, MEMORY/USER へのリスト圧縮, 作業ディレクトリへの Write で skills を更新すること
 
 **Operator**:
 入口を通じて Discord Agent を操作してよい主体。許可された Discord ユーザーと一致する。同一性は Operator 鍵（`user:<discordUserId>`）。

@@ -32,5 +32,7 @@ jobs:
 
       - run: npm run check:review
 
+      - run: npm run check:cron
+
       - name: Docker build
         run: docker build -t discord-agent:ci .

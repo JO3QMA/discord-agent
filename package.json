@@ -19,6 +19,7 @@
     "check:operator-block": "tsx src/cli/check-operator-block.ts",
     "check:split-message": "tsx src/cli/check-split-message.ts",
     "check:review": "tsx src/cli/check-review.ts",
+    "check:cron": "tsx src/cli/check-cron.ts",
     "smoke:sdk": "tsx src/cli/smoke-sdk.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

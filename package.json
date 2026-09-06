@@ -24,7 +24,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@cursor/sdk": "1.0.28",
+    "@cursor/sdk": "1.0.30",
     "@discordjs/voice": "^0.19.2",
     "@modelcontextprotocol/sdk": "1.30.0",
     "discord.js": "14.27.0",
@@ -35,7 +35,7 @@
   },
   "devDependencies": {
     "@types/node": "22.20.1",
-    "tsx": "4.23.12",
+    "tsx": "4.23.13",
     "typescript": "5.9.3"
   }
 }

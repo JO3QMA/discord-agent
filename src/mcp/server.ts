@@ -279,6 +279,9 @@ async function main() {
       prompt: z.string().optional(),
       channel_id: z.string().optional(),
       no_agent: z.boolean().optional(),
+      continuity: z.boolean().optional(),
+      mode: z.enum(["agent", "monitor"]).optional(),
+      notepad: z.boolean().optional(),
     },
     async (args) => {
       try {
@@ -303,6 +306,9 @@ async function main() {
               prompt: args.prompt,
               channelId,
               noAgent: args.no_agent,
+              continuity: args.continuity,
+              mode: args.mode,
+              notepad: args.notepad,
             }),
           );
         }
@@ -330,6 +336,11 @@ async function main() {
               ...(args.schedule ? { schedule: args.schedule } : {}),
               ...(args.prompt ? { prompt: args.prompt } : {}),
               ...(args.channel_id ? { channelId: args.channel_id } : {}),
+              ...(args.continuity !== undefined
+                ? { continuity: args.continuity }
+                : {}),
+              ...(args.mode ? { mode: args.mode } : {}),
+              ...(args.notepad !== undefined ? { notepad: args.notepad } : {}),
             }),
           );
         }

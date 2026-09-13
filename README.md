@@ -63,7 +63,7 @@ docker compose up -d
 | `/stop` `/retry` `/undo` | 中断（待ちも破棄）・再送・ローカル undo + セッションリセット |
 | `/title` `/sessions` `/resume` | 会話タイトル |
 | `/personality` | `data/personalities/*.md` + `SOUL.md` |
-| `/model` `/usage` | モデル切替・概算トークン |
+| `/model` `/usage` `/status` | モデル切替・概算トークン・ゲートウェイ概要 |
 | `/sethome` | ホームチャンネル（起動通知・cron 既定宛先） |
 | `/reload-mcp` | `data/mcp.json` / `MCP_SERVERS_JSON` を次回 create に反映 |
 | `/cron` | スケジュールジョブ |
@@ -83,7 +83,7 @@ docker compose up -d
 - 毎ターン後レビュー + `💾` 通知
 - 会話は `data/sessions.sqlite`（FTS5）へインデックス
 - write_approval: `/memory approval on` 等でステージ → `/memory approve` / `/skills approve`
-- Cron: `/cron` または MCP `cronjob`、配信はホーム or 作成チャンネル
+- Cron: `/cron` または MCP `cronjob`、配信はホーム or 作成チャンネル（MCP で continuity / monitor / notepad 可）
 - 追加 MCP: `data/mcp.json` または `MCP_SERVERS_JSON`
 - Skills Hub: `/skills install` に SKILL.md の URL/パス
 - 人格サンプル: `examples/personalities/friendly.md` → `data/personalities/friendly.md` にコピー

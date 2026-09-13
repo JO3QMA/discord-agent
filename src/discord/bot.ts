@@ -191,6 +191,9 @@ const slashCommands = [
     .setName("usage")
     .setDescription("この会話のセッション使用量"),
   new SlashCommandBuilder()
+    .setName("status")
+    .setDescription("ゲートウェイ概要（モデル・キュー・承認・cron 等）"),
+  new SlashCommandBuilder()
     .setName("sethome")
     .setDescription("このチャンネルをホームに設定"),
   new SlashCommandBuilder()
@@ -680,6 +683,40 @@ async function handleSlash(
     return;
   }
 
+  if (name === "status") {
+    const settings = await loadSettings(cfg.dataDir);
+    const store = await loadSessionStore(cfg.dataDir);
+    const meta = store[key];
+    const model = await resolveModel(cfg, cfg.dataDir, interaction.user.id);
+    const label = formatModelLabel(model, cfg.modelFast, cfg.modelEffort);
+    const pending = await listPending(cfg.dataDir);
+    const memPending = pending.filter((p) => p.kind === "memory").length;
+    const skillPending = pending.filter((p) => p.kind === "skill").length;
+    const queueLen = active.get(key)?.queue.length ?? 0;
+    const jobs = await loadCronJobs(cfg.dataDir);
+    const nextJob = jobs
+      .filter((j) => !j.paused)
+      .sort(
+        (a, b) =>
+          new Date(a.nextRunAt).getTime() - new Date(b.nextRunAt).getTime(),
+      )[0];
+    const vc = interaction.guildId ? vcStatus(interaction.guildId) : "n/a";
+    const agentShort = meta?.agentId ? meta.agentId.slice(0, 8) : "none";
+    const lines = [
+      `**model** \`${label}\``,
+      `**会話** \`${key}\` turns=${meta?.turns ?? 0} title=${meta?.title ?? "—"} agent=${agentShort}`,
+      `**queue** ${queueLen}`,
+      `**pending** memory=${memPending} skill=${skillPending}`,
+      `**write_approval** memory=${settings.memoryWriteApproval} skills=${settings.skillsWriteApproval}`,
+      `**mcpGeneration** ${settings.mcpGeneration}`,
+      `**home** ${settings.home?.channelId ? `<#${settings.home.channelId}>` : "—"}`,
+      `**next cron** ${nextJob ? `${nextJob.name} @ ${nextJob.nextRunAt}` : "none"}`,
+      `**voice** ${settings.voiceMode}; VC ${vc}`,
+    ];
+    await replyInteraction(interaction, lines.join("\n"));
+    return;
+  }
+
   if (name === "sethome") {
     const ch = interaction.channel;
     if (!ch) {
@@ -714,10 +751,17 @@ async function handleSlash(
         interaction,
         jobs.length
           ? jobs
-              .map(
-                (j) =>
-                  `- \`${j.id}\` **${j.name}** ${j.paused ? "⏸" : "▶"} \`${j.schedule}\` next=${j.nextRunAt}`,
-              )
+              .map((j) => {
+                const flags = [
+                  j.continuity ? "c" : "",
+                  j.mode === "monitor" ? "m" : "",
+                  j.notepad ? "n" : "",
+                ]
+                  .filter(Boolean)
+                  .join("");
+                const flagStr = flags ? `[${flags}] ` : "";
+                return `- \`${j.id}\` ${flagStr}**${j.name}** ${j.paused ? "⏸" : "▶"} \`${j.schedule}\` next=${j.nextRunAt}`;
+              })
               .join("\n")
           : "_no jobs_",
       );

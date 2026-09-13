@@ -266,6 +266,11 @@ function stripBotMentions(content: string, botId: string): string {
   return content.replace(new RegExp(`<@!?${botId}>`, "g"), "").trim();
 }
 
+/** Keep user-controlled strings from breaking Discord markdown in /status and /cron list. */
+function discordMd(text: string): string {
+  return text.replace(/[`*_<>@|]/g, "\\$&");
+}
+
 async function sendChunked(
   send: (content: string) => Promise<unknown>,
   content: string,
@@ -684,33 +689,32 @@ async function handleSlash(
   }
 
   if (name === "status") {
-    const settings = await loadSettings(cfg.dataDir);
-    const store = await loadSessionStore(cfg.dataDir);
+    const [settings, store, model, pending, jobs] = await Promise.all([
+      loadSettings(cfg.dataDir),
+      loadSessionStore(cfg.dataDir),
+      resolveModel(cfg, cfg.dataDir, interaction.user.id),
+      listPending(cfg.dataDir),
+      loadCronJobs(cfg.dataDir),
+    ]);
     const meta = store[key];
-    const model = await resolveModel(cfg, cfg.dataDir, interaction.user.id);
     const label = formatModelLabel(model, cfg.modelFast, cfg.modelEffort);
-    const pending = await listPending(cfg.dataDir);
     const memPending = pending.filter((p) => p.kind === "memory").length;
     const skillPending = pending.filter((p) => p.kind === "skill").length;
     const queueLen = active.get(key)?.queue.length ?? 0;
-    const jobs = await loadCronJobs(cfg.dataDir);
     const nextJob = jobs
-      .filter((j) => !j.paused)
-      .sort(
-        (a, b) =>
-          new Date(a.nextRunAt).getTime() - new Date(b.nextRunAt).getTime(),
-      )[0];
+      .filter((j) => !j.paused && !Number.isNaN(Date.parse(j.nextRunAt)))
+      .sort((a, b) => Date.parse(a.nextRunAt) - Date.parse(b.nextRunAt))[0];
     const vc = interaction.guildId ? vcStatus(interaction.guildId) : "n/a";
     const agentShort = meta?.agentId ? meta.agentId.slice(0, 8) : "none";
     const lines = [
       `**model** \`${label}\``,
-      `**会話** \`${key}\` turns=${meta?.turns ?? 0} title=${meta?.title ?? "—"} agent=${agentShort}`,
+      `**会話** \`${key}\` turns=${meta?.turns ?? 0} title=${discordMd(meta?.title ?? "—")} agent=${agentShort}`,
       `**queue** ${queueLen}`,
       `**pending** memory=${memPending} skill=${skillPending}`,
       `**write_approval** memory=${settings.memoryWriteApproval} skills=${settings.skillsWriteApproval}`,
       `**mcpGeneration** ${settings.mcpGeneration}`,
       `**home** ${settings.home?.channelId ? `<#${settings.home.channelId}>` : "—"}`,
-      `**next cron** ${nextJob ? `${nextJob.name} @ ${nextJob.nextRunAt}` : "none"}`,
+      `**next cron** ${nextJob ? `${discordMd(nextJob.name)} @ ${nextJob.nextRunAt}` : "none"}`,
       `**voice** ${settings.voiceMode}; VC ${vc}`,
     ];
     await replyInteraction(interaction, lines.join("\n"));
@@ -760,7 +764,7 @@ async function handleSlash(
                   .filter(Boolean)
                   .join("");
                 const flagStr = flags ? `[${flags}] ` : "";
-                return `- \`${j.id}\` ${flagStr}**${j.name}** ${j.paused ? "⏸" : "▶"} \`${j.schedule}\` next=${j.nextRunAt}`;
+                return `- \`${j.id}\` ${flagStr}**${discordMd(j.name)}** ${j.paused ? "⏸" : "▶"} \`${discordMd(j.schedule)}\` next=${j.nextRunAt}`;
               })
               .join("\n")
           : "_no jobs_",

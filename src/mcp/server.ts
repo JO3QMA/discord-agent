@@ -278,10 +278,26 @@ async function main() {
       schedule: z.string().optional(),
       prompt: z.string().optional(),
       channel_id: z.string().optional(),
-      no_agent: z.boolean().optional(),
-      continuity: z.boolean().optional(),
-      mode: z.enum(["agent", "monitor"]).optional(),
-      notepad: z.boolean().optional(),
+      no_agent: z
+        .boolean()
+        .optional()
+        .describe("Skip the agent and deliver the prompt text as-is"),
+      continuity: z
+        .boolean()
+        .optional()
+        .describe("Inject the previous run output into the next prompt"),
+      mode: z
+        .enum(["agent", "monitor"])
+        .optional()
+        .describe(
+          'agent: always deliver; monitor: skip Discord delivery when output is unchanged (requires continuity)',
+        ),
+      notepad: z
+        .boolean()
+        .optional()
+        .describe(
+          "Persist the full output as a per-job scratchpad for the next run",
+        ),
     },
     async (args) => {
       try {

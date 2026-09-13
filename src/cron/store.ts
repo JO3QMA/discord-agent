@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 export type CronJob = {
   id: string;
@@ -16,7 +16,6 @@ export type CronJob = {
   continuity?: boolean;
   mode?: "agent" | "monitor";
   lastOutput?: string;
-  lastSnapshotHash?: string;
   notepad?: boolean;
   nextRunAt: string;
   lastRunAt?: string;
@@ -32,12 +31,15 @@ export function capCronOutput(text: string): string {
   return text.slice(0, CRON_OUTPUT_CAP);
 }
 
-export function cronSnapshotHash(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
+function safeJobId(jobId: string): string {
+  if (!/^[A-Za-z0-9_-]+$/.test(jobId)) {
+    throw new Error(`invalid cron job id: ${jobId}`);
+  }
+  return jobId;
 }
 
 function notepadPath(dataDir: string, jobId: string): string {
-  return path.join(dataDir, "cron-notepads", `${jobId}.md`);
+  return path.join(dataDir, "cron-notepads", `${safeJobId(jobId)}.md`);
 }
 
 export async function readCronNotepad(
@@ -62,9 +64,9 @@ export async function writeCronNotepad(
   await fs.writeFile(notepadPath(dataDir, jobId), capCronOutput(content), "utf8");
 }
 
-/** Neutralize line-start `===` so lastOutput cannot forge prompt section markers. */
+/** Break `===` fences in untrusted LLM output so it cannot forge prompt sections. */
 function sanitizeCronEmbed(text: string): string {
-  return text.replace(/^(\s*)(===)/gm, "$1\u200B$2");
+  return text.replaceAll("===", "\u200B===");
 }
 
 function buildContinuityBlock(lastOutput: string): string {
@@ -86,7 +88,7 @@ export async function buildCronPrompt(
     const pad = await readCronNotepad(dataDir, job.id);
     parts.push(
       "=== CRON NOTEPAD (scratchpad from previous run) ===",
-      pad || "(empty)",
+      sanitizeCronEmbed(pad || "(empty)"),
       "=== END NOTEPAD ===",
       "Your full reply will replace the notepad after this run.",
     );
@@ -258,7 +260,6 @@ export function startCronScheduler(opts: {
             await opts.deliver(job.channelId, `⏰ **${job.name}**\n${text}`);
           }
           job.lastOutput = capCronOutput(text);
-          job.lastSnapshotHash = cronSnapshotHash(text);
           if (job.notepad) {
             await writeCronNotepad(opts.dataDir, job.id, job.lastOutput);
           }

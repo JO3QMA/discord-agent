@@ -3,6 +3,7 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  MessageFlags,
   Partials,
   REST,
   Routes,
@@ -87,6 +88,49 @@ type Active = {
   run: Run | null;
   queue: QueuedTurn[];
 };
+
+function formatTurnError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (raw.includes("resource_exhausted")) {
+    return (
+      "Cursor API の利用上限またはレート制限に達しました（resource_exhausted）。\n" +
+      "しばらく待ってから再送または /retry してください。Cursor ダッシュボードの利用状況も確認してください。"
+    );
+  }
+  return `エラー: ${raw}`;
+}
+
+async function replyEphemeral(
+  interaction: ChatInputCommandInteraction,
+  content: string,
+): Promise<void> {
+  await interaction.reply({
+    content,
+    flags: MessageFlags.Ephemeral,
+  });
+}
+
+async function reportSlashError(
+  interaction: ChatInputCommandInteraction,
+  err: unknown,
+): Promise<void> {
+  const msg = formatTurnError(err);
+  const payload = { content: msg, flags: MessageFlags.Ephemeral as const };
+  try {
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp(payload);
+    } else {
+      await interaction.reply(payload);
+    }
+  } catch (replyErr) {
+    const code = (replyErr as { code?: number }).code;
+    if (code === 10062) {
+      console.warn("slash error reply skipped: interaction token expired");
+      return;
+    }
+    console.error(replyErr);
+  }
+}
 
 async function abandonQueuedTurns(queue: QueuedTurn[]): Promise<number> {
   const items = queue.splice(0, queue.length);
@@ -421,17 +465,11 @@ async function handleSlash(
   }) => Promise<void>,
 ): Promise<void> {
   if (!isAllowedUser(cfg, interaction.user.id)) {
-    await interaction.reply({
-      content: "許可されていないユーザーです。",
-      ephemeral: true,
-    });
+    await replyEphemeral(interaction, "許可されていないユーザーです。");
     return;
   }
   if (!isAllowedChannel(cfg, interaction.channel)) {
-    await interaction.reply({
-      content: "このチャンネルでは応答しません。",
-      ephemeral: true,
-    });
+    await replyEphemeral(interaction, "このチャンネルでは応答しません。");
     return;
   }
 
@@ -475,6 +513,8 @@ async function handleSlash(
     if (await handleWriteApprovalActions(cfg, interaction, "memory", action, id)) {
       return;
     }
+    await replyInteraction(interaction, "不明な memory action です。");
+    return;
   }
 
   if (name === "skills") {
@@ -504,6 +544,8 @@ async function handleSlash(
     if (await handleWriteApprovalActions(cfg, interaction, "skill", action, id)) {
       return;
     }
+    await replyInteraction(interaction, "不明な skills action です。");
+    return;
   }
 
   if (name === "search") {
@@ -527,7 +569,7 @@ async function handleSlash(
   if (name === "stop") {
     const a = active.get(key);
     if (!a) {
-      await interaction.reply({ content: "実行中のターンはありません。", ephemeral: true });
+      await replyEphemeral(interaction, "実行中のターンはありません。");
       return;
     }
     await interaction.deferReply();
@@ -545,7 +587,7 @@ async function handleSlash(
     const store = await loadSessionStore(cfg.dataDir);
     const last = store[key]?.lastUserText;
     if (!last) {
-      await interaction.reply({ content: "再送する直前発話がありません。", ephemeral: true });
+      await replyEphemeral(interaction, "再送する直前発話がありません。");
       return;
     }
     await interaction.deferReply();
@@ -622,12 +664,15 @@ async function handleSlash(
   if (name === "personality") {
     const n = opt("name");
     if (!n || n === "list") {
+      await interaction.deferReply();
       const list = await listPersonalities(cfg.dataDir);
-      await interaction.reply(
+      await replyInteraction(
+        interaction,
         list.length ? list.map((x) => `- ${x}`).join("\n") : "_no personalities_ (data/personalities/*.md)",
       );
       return;
     }
+    await interaction.deferReply();
     const s = await loadSettings(cfg.dataDir);
     const op = operatorKey(interaction.user.id);
     s.personalityByOperator[op] = n;
@@ -635,7 +680,8 @@ async function handleSlash(
     const store = await loadSessionStore(cfg.dataDir);
     delete store[key];
     await saveSessionStore(cfg.dataDir, store);
-    await interaction.reply(
+    await replyInteraction(
+      interaction,
       `personality=${n}（Operator 付帯。この会話のセッションは次回メッセージで再 create）`,
     );
     return;
@@ -1103,11 +1149,9 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
       } catch (err) {
         console.error(err);
         if (statusRef.msg) await statusRef.msg.delete().catch(() => {});
-        await turn
-          .reply(`エラー: ${err instanceof Error ? err.message : String(err)}`)
-          .catch((replyErr) => {
-            console.error("turn error reply failed:", replyErr);
-          });
+        await turn.reply(formatTurnError(err)).catch((replyErr) => {
+          console.error("turn error reply failed:", replyErr);
+        });
         await reactions.failed();
         const cur = active.get(turn.key);
         if (cur && (turnEpoch.get(turn.key) ?? 0) === epoch) cur.run = null;
@@ -1192,12 +1236,7 @@ export async function startDiscordBot(cfg: AppConfig): Promise<Client> {
       );
     } catch (err) {
       console.error(err);
-      const msg = `エラー: ${err instanceof Error ? err.message : String(err)}`;
-      if (interaction.deferred || interaction.replied) {
-        await interaction.followUp({ content: msg, ephemeral: true }).catch(() => {});
-      } else {
-        await interaction.reply({ content: msg, ephemeral: true }).catch(() => {});
-      }
+      await reportSlashError(interaction, err);
     }
   });
 

@@ -235,6 +235,9 @@ const slashCommands = [
     .setName("usage")
     .setDescription("この会話のセッション使用量"),
   new SlashCommandBuilder()
+    .setName("status")
+    .setDescription("ゲートウェイ概要（モデル・キュー・承認・cron 等）"),
+  new SlashCommandBuilder()
     .setName("sethome")
     .setDescription("このチャンネルをホームに設定"),
   new SlashCommandBuilder()
@@ -305,6 +308,11 @@ function isAllowedChannel(
 
 function stripBotMentions(content: string, botId: string): string {
   return content.replace(new RegExp(`<@!?${botId}>`, "g"), "").trim();
+}
+
+/** Keep user-controlled strings from breaking Discord markdown in /status and /cron list. */
+function discordMd(text: string): string {
+  return text.replace(/[`*_<>@|]/g, "\\$&");
 }
 
 async function sendChunked(
@@ -726,6 +734,39 @@ async function handleSlash(
     return;
   }
 
+  if (name === "status") {
+    const [settings, store, model, pending, jobs] = await Promise.all([
+      loadSettings(cfg.dataDir),
+      loadSessionStore(cfg.dataDir),
+      resolveModel(cfg, cfg.dataDir, interaction.user.id),
+      listPending(cfg.dataDir),
+      loadCronJobs(cfg.dataDir),
+    ]);
+    const meta = store[key];
+    const label = formatModelLabel(model, cfg.modelFast, cfg.modelEffort);
+    const memPending = pending.filter((p) => p.kind === "memory").length;
+    const skillPending = pending.filter((p) => p.kind === "skill").length;
+    const queueLen = active.get(key)?.queue.length ?? 0;
+    const nextJob = jobs
+      .filter((j) => !j.paused && !Number.isNaN(Date.parse(j.nextRunAt)))
+      .sort((a, b) => Date.parse(a.nextRunAt) - Date.parse(b.nextRunAt))[0];
+    const vc = interaction.guildId ? vcStatus(interaction.guildId) : "n/a";
+    const agentShort = meta?.agentId ? meta.agentId.slice(0, 8) : "none";
+    const lines = [
+      `**model** \`${label}\``,
+      `**会話** \`${key}\` turns=${meta?.turns ?? 0} title=${discordMd(meta?.title ?? "—")} agent=${agentShort}`,
+      `**queue** ${queueLen}`,
+      `**pending** memory=${memPending} skill=${skillPending}`,
+      `**write_approval** memory=${settings.memoryWriteApproval} skills=${settings.skillsWriteApproval}`,
+      `**mcpGeneration** ${settings.mcpGeneration}`,
+      `**home** ${settings.home?.channelId ? `<#${settings.home.channelId}>` : "—"}`,
+      `**next cron** ${nextJob ? `${discordMd(nextJob.name)} @ ${nextJob.nextRunAt}` : "none"}`,
+      `**voice** ${settings.voiceMode}; VC ${vc}`,
+    ];
+    await replyInteraction(interaction, lines.join("\n"));
+    return;
+  }
+
   if (name === "sethome") {
     const ch = interaction.channel;
     if (!ch) {
@@ -760,10 +801,17 @@ async function handleSlash(
         interaction,
         jobs.length
           ? jobs
-              .map(
-                (j) =>
-                  `- \`${j.id}\` **${j.name}** ${j.paused ? "⏸" : "▶"} \`${j.schedule}\` next=${j.nextRunAt}`,
-              )
+              .map((j) => {
+                const flags = [
+                  j.continuity ? "c" : "",
+                  j.mode === "monitor" ? "m" : "",
+                  j.notepad ? "n" : "",
+                ]
+                  .filter(Boolean)
+                  .join("");
+                const flagStr = flags ? `[${flags}] ` : "";
+                return `- \`${j.id}\` ${flagStr}**${discordMd(j.name)}** ${j.paused ? "⏸" : "▶"} \`${discordMd(j.schedule)}\` next=${j.nextRunAt}`;
+              })
               .join("\n")
           : "_no jobs_",
       );

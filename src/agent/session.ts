@@ -218,24 +218,56 @@ export type AgentHandles = {
   modelFast?: boolean;
   /** 省略時は effort param を送らない。 */
   modelEffort?: string | null;
+  /** Grok 4.7 の context。未設定なら 256k。 */
+  modelContext?: string | null;
   dataDir: string;
   agentCwd: string;
 };
 
 export type ModelSelectionParams = Array<{ id: string; value: string }>;
 
+/** Map cursor-agent flattened slugs (e.g. grok-4.7-medium) to SDK base id + params. */
+export function parseCliModelSlug(
+  modelId: string,
+  modelFast: boolean,
+  modelEffort?: string | null,
+): { modelId: string; modelFast: boolean; modelEffort: string | null | undefined } {
+  const m = modelId.match(/^grok-4\.7-(low|medium|high|xhigh)(-fast)?$/);
+  if (!m) return { modelId, modelFast, modelEffort };
+  return {
+    modelId: "grok-4.7",
+    modelFast: m[2] === "-fast" || modelFast,
+    modelEffort: modelEffort ?? m[1],
+  };
+}
+
 /** Build SDK ModelSelection. Omitting params lets SDK pick first allowed (often fast=true). */
 export function toModelSelection(
   modelId: string,
   modelFast = false,
   modelEffort?: string | null,
+  modelContext?: string | null,
 ): { id: string; params: ModelSelectionParams } {
   // ponytail: always send fast; extra params are ignored if the model lacks them.
   // Catalog-driven params would need Cursor.models.list() per API key.
-  const params: ModelSelectionParams = [
-    { id: "fast", value: modelFast ? "true" : "false" },
-  ];
-  if (modelEffort) params.unshift({ id: "effort", value: modelEffort });
+  const parsed = parseCliModelSlug(modelId, modelFast, modelEffort);
+  modelId = parsed.modelId;
+  modelFast = parsed.modelFast;
+  modelEffort = parsed.modelEffort;
+
+  const params: ModelSelectionParams = [];
+  if (modelId === "grok-4.7") {
+    params.push({
+      id: "context",
+      value: modelContext?.trim() || "256k",
+    });
+    if (modelEffort) {
+      params.push({ id: "reasoning_effort", value: modelEffort });
+    }
+  } else if (modelEffort) {
+    params.push({ id: "effort", value: modelEffort });
+  }
+  params.push({ id: "fast", value: modelFast ? "true" : "false" });
   return { id: modelId, params };
 }
 
@@ -243,10 +275,19 @@ export function formatModelLabel(
   modelId: string,
   modelFast = false,
   modelEffort?: string | null,
+  modelContext?: string | null,
 ): string {
-  const bits = [`fast=${modelFast}`];
-  if (modelEffort) bits.unshift(`effort=${modelEffort}`);
-  return `${modelId} (${bits.join(", ")})`;
+  const parsed = parseCliModelSlug(modelId, modelFast, modelEffort);
+  const bits = [`fast=${parsed.modelFast}`];
+  if (parsed.modelId === "grok-4.7") {
+    bits.unshift(`context=${modelContext?.trim() || "256k"}`);
+    if (parsed.modelEffort) {
+      bits.unshift(`reasoning_effort=${parsed.modelEffort}`);
+    }
+  } else if (parsed.modelEffort) {
+    bits.unshift(`effort=${parsed.modelEffort}`);
+  }
+  return `${parsed.modelId} (${bits.join(", ")})`;
 }
 
 export type OpenedAgent = {
@@ -269,6 +310,7 @@ export async function openAgent(
       opts.modelId,
       opts.modelFast ?? false,
       opts.modelEffort,
+      opts.modelContext,
     ),
     mcpServers,
     local: { cwd: opts.agentCwd },

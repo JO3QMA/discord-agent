@@ -9,7 +9,7 @@ import { ensureMemoryLayout, memoryList } from "../memory/store.js";
 import { ensureSkillsLayout } from "../skills/store.js";
 import { openAgent, runUserTurn } from "../agent/session.js";
 import { runDetachedReview } from "../agent/review.js";
-import { parseBool, parseModelEffort } from "../config.js";
+import { parseBool, parseModelContext, parseModelEffort } from "../config.js";
 
 async function main() {
   const key = process.env.CURSOR_API_KEY?.trim();
@@ -31,6 +31,7 @@ async function main() {
     modelId: process.env.CURSOR_MODEL?.trim() || "composer-2.5",
     modelFast: process.env.CURSOR_MODEL_FAST?.trim().toLowerCase() === "true",
     modelEffort: parseModelEffort(process.env.CURSOR_MODEL_EFFORT),
+    modelContext: parseModelContext(process.env.CURSOR_MODEL_CONTEXT),
     dataDir,
     agentCwd: cwd,
   });
@@ -53,6 +54,9 @@ async function main() {
         process.env.REVIEW_MODEL_EFFORT,
         "REVIEW_MODEL_EFFORT",
       ),
+      modelContext:
+        parseModelContext(process.env.REVIEW_MODEL_CONTEXT, "REVIEW_MODEL_CONTEXT") ??
+        parseModelContext(process.env.CURSOR_MODEL_CONTEXT),
       dataDir,
       agentCwd: cwd,
       operatorId: "smoke-user",

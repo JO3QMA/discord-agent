@@ -72,7 +72,7 @@ docker compose up -d
 
 **会話**（Discord）の鍵: 通常／DM は `channel:<id>`（場所共有）、スレッドは `thread:<id>`。**セッション**は Cursor 側。**Operator 鍵** `user:<id>` に人格・USER。旧鍵は移行しない。
 
-`CURSOR_MODEL_FAST`（既定 `false`）は全モデルに `fast` param を明示する。`CURSOR_MODEL_EFFORT`（`low|medium|high|xhigh`）は任意。未設定なら effort は送らずモデル既定に任せる。Grok 4.7 は SDK が `reasoning_effort` と必須の `context` を使う（`CURSOR_MODEL_CONTEXT=256k|500k`、省略時 256k）。`CURSOR_MODEL` は SDK のベース id（例: `grok-4.7`）。`cursor-agent models` の `grok-4.7-medium` 等は CLI 用。詳細は `data/skills/discord-gateway/references/models.md`。
+`CURSOR_MODEL_FAST`（既定 `false`）は全モデルに `fast` param を明示する。`CURSOR_MODEL_EFFORT`（`low|medium|high|xhigh`）は任意。未設定なら effort は送らずモデル既定に任せる。Grok 4.7 は SDK が `reasoning_effort` と必須の `context` を使う（`CURSOR_MODEL_CONTEXT=256k|500k`、省略時 256k）。`CURSOR_MODEL` は SDK のベース id（例: `grok-4.7`）。`cursor-agent models` の `grok-4.7-medium` 等は CLI 用。詳細は [docs/models.md](docs/models.md)。
 
 `DISCORD_GUILD_ID` あり: ギルドへ即時登録し、**グローバルコマンドは空クリア**（二重表示防止）。なし: グローバルのみ（反映に最大約1時間）。
 

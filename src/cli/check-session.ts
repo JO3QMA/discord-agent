@@ -87,8 +87,32 @@ async function main() {
   if (JSON.stringify(grokNoEffort.params) !== JSON.stringify([{ id: "fast", value: "true" }])) {
     throw new Error("grok without effort should still send fast");
   }
+  const grok47 = toModelSelection("grok-4.7", false, "medium");
+  if (
+    JSON.stringify(grok47.params) !==
+    JSON.stringify([
+      { id: "context", value: "256k" },
+      { id: "reasoning_effort", value: "medium" },
+      { id: "fast", value: "false" },
+    ])
+  ) {
+    throw new Error("grok-4.7 should send context+reasoning_effort+fast");
+  }
+  const grok47Cli = toModelSelection("grok-4.7-high", true);
+  if (
+    grok47Cli.id !== "grok-4.7" ||
+    grok47Cli.params.find((p) => p.id === "reasoning_effort")?.value !== "high"
+  ) {
+    throw new Error("grok-4.7 CLI slug should map to SDK id");
+  }
   if (formatModelLabel("grok-4.6", false, "xhigh") !== "grok-4.6 (effort=xhigh, fast=false)") {
     throw new Error("formatModelLabel should show effort+fast");
+  }
+  if (
+    formatModelLabel("grok-4.7", false, "medium") !==
+    "grok-4.7 (reasoning_effort=medium, context=256k, fast=false)"
+  ) {
+    throw new Error("formatModelLabel should show grok-4.7 params");
   }
   if (parseModelEffort(undefined) !== null) throw new Error("unset effort is null");
   if (parseModelEffort("HIGH") !== "high") throw new Error("effort is case-insensitive");

@@ -112,6 +112,7 @@ export async function runDetachedReview(
         opts.modelId,
         opts.modelFast ?? true,
         opts.modelEffort,
+        opts.modelContext,
       ),
       mcpServers: builtinMcpConfig(opts.dataDir, opts.operatorId),
       local: { cwd: opts.agentCwd },

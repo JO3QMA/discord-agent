@@ -47,6 +47,20 @@ export function parseModelEffort(
   );
 }
 
+export const MODEL_CONTEXTS = ["256k", "500k"] as const;
+export type ModelContext = (typeof MODEL_CONTEXTS)[number];
+
+/** Grok 4.7 SDK param `context`. Unset → gateway default 256k at selection time. */
+export function parseModelContext(
+  raw: string | undefined,
+  label = "CURSOR_MODEL_CONTEXT",
+): ModelContext | null {
+  if (raw === undefined || raw.trim() === "") return null;
+  const v = raw.trim().toLowerCase();
+  if ((MODEL_CONTEXTS as readonly string[]).includes(v)) return v as ModelContext;
+  throw new Error(`${label} must be ${MODEL_CONTEXTS.join("|")} (got ${JSON.stringify(raw)})`);
+}
+
 export type AppConfig = {
   cursorApiKey: string;
   discordBotToken: string;
@@ -70,12 +84,16 @@ export type AppConfig = {
   modelFast: boolean;
   /** 未設定なら effort param を送らない（モデル既定に任せる）。 */
   modelEffort: ModelEffort | null;
+  /** Grok 4.7 の `context` param。未設定なら 256k。 */
+  modelContext: ModelContext | null;
   /** 定着レビュー用。未設定なら本体と同じ `modelId`。 */
   reviewModelId: string;
   /** 定着レビュー用。既定 true（本体の modelFast とは独立）。 */
   reviewModelFast: boolean;
   /** 定着レビュー用。未設定なら effort param を送らない。 */
   reviewModelEffort: ModelEffort | null;
+  /** 定着レビュー用 Grok 4.7 context。未設定なら本体と同じ既定（256k）。 */
+  reviewModelContext: ModelContext | null;
   memoryNotifications: "off" | "on";
   /** Send a message to /sethome channel on gateway start. */
   homeNotifyOnStart: boolean;
@@ -102,11 +120,16 @@ export function loadConfig(): AppConfig {
     modelId,
     modelFast: parseBool(process.env.CURSOR_MODEL_FAST, false),
     modelEffort: parseModelEffort(process.env.CURSOR_MODEL_EFFORT),
+    modelContext: parseModelContext(process.env.CURSOR_MODEL_CONTEXT),
     reviewModelId: process.env.REVIEW_MODEL?.trim() || modelId,
     reviewModelFast: parseBool(process.env.REVIEW_MODEL_FAST, true),
     reviewModelEffort: parseModelEffort(
       process.env.REVIEW_MODEL_EFFORT,
       "REVIEW_MODEL_EFFORT",
+    ),
+    reviewModelContext: parseModelContext(
+      process.env.REVIEW_MODEL_CONTEXT,
+      "REVIEW_MODEL_CONTEXT",
     ),
     memoryNotifications: notif,
     homeNotifyOnStart: parseBool(process.env.HOME_NOTIFY_ON_START, true),
